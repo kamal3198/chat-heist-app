@@ -1,7 +1,15 @@
 const express = require('express');
 const { z } = require('zod');
+
 const auth = require('../middleware/auth');
-const Group = require('../models/Group');
+const {
+  createGroup,
+  getGroupById,
+  updateGroup,
+  deleteGroup,
+  listGroupsForMember,
+  populateByUserFields,
+} = require('../services/store');
 
 const router = express.Router();
 
@@ -16,10 +24,9 @@ const updateMembersSchema = z.object({
 });
 
 function isAdmin(group, userId) {
-  return group.admins.some((id) => id.toString() === userId.toString());
+  return (group.admins || []).map(String).includes(String(userId));
 }
 
-// Create group
 router.post('/', auth, async (req, res) => {
   try {
     const parsed = createGroupSchema.safeParse(req.body);
@@ -27,46 +34,39 @@ router.post('/', auth, async (req, res) => {
       return res.status(400).json({ error: 'Invalid payload', details: parsed.error.flatten() });
     }
 
-    const creatorId = req.userId.toString();
-    const uniqueMembers = Array.from(
-      new Set([creatorId, ...parsed.data.memberIds.map((id) => id.toString())])
-    );
+    const creatorId = String(req.userId);
+    const uniqueMembers = Array.from(new Set([creatorId, ...parsed.data.memberIds.map(String)]));
 
     if (uniqueMembers.length < 2) {
       return res.status(400).json({ error: 'A group must have at least 2 members' });
     }
 
-    const group = await Group.create({
+    const group = await createGroup({
       name: parsed.data.name,
       description: parsed.data.description,
+      avatar: '',
       members: uniqueMembers,
       admins: [creatorId],
       createdBy: creatorId,
     });
 
-    await group.populate('members admins createdBy', '-password');
-    res.status(201).json({ group });
+    const populated = await populateByUserFields(group, ['members', 'admins', 'createdBy']);
+    return res.status(201).json({ group: populated });
   } catch (error) {
-    console.error('Create group error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
-// List groups for current user
 router.get('/', auth, async (req, res) => {
   try {
-    const groups = await Group.find({ members: req.userId })
-      .populate('members admins createdBy', '-password')
-      .sort({ updatedAt: -1 });
-
-    res.json({ groups });
+    const groups = await listGroupsForMember(req.userId);
+    const populated = await populateByUserFields(groups, ['members', 'admins', 'createdBy']);
+    return res.json({ groups: populated });
   } catch (error) {
-    console.error('List groups error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Add members (admin only)
 router.post('/:id/members', auth, async (req, res) => {
   try {
     const parsed = updateMembersSchema.safeParse(req.body);
@@ -74,124 +74,131 @@ router.post('/:id/members', auth, async (req, res) => {
       return res.status(400).json({ error: 'Invalid payload', details: parsed.error.flatten() });
     }
 
-    const group = await Group.findById(req.params.id);
+    const group = await getGroupById(req.params.id);
     if (!group) return res.status(404).json({ error: 'Group not found' });
-    if (!group.members.some((id) => id.toString() === req.userId.toString())) {
+
+    const actorId = String(req.userId);
+    const members = (group.members || []).map(String);
+
+    if (!members.includes(actorId)) {
       return res.status(403).json({ error: 'Not a group member' });
     }
-    if (!isAdmin(group, req.userId)) {
+    if (!isAdmin(group, actorId)) {
       return res.status(403).json({ error: 'Only admins can add members' });
     }
 
-    const currentMembers = new Set(group.members.map((id) => id.toString()));
-    for (const memberId of parsed.data.memberIds.map((id) => id.toString())) {
-      currentMembers.add(memberId);
-    }
-
-    group.members = Array.from(currentMembers);
-    await group.save();
-    await group.populate('members admins createdBy', '-password');
-    res.json({ group });
+    const mergedMembers = Array.from(new Set([...members, ...parsed.data.memberIds.map(String)]));
+    const updated = await updateGroup(group._id, { members: mergedMembers });
+    const populated = await populateByUserFields(updated, ['members', 'admins', 'createdBy']);
+    return res.json({ group: populated });
   } catch (error) {
-    console.error('Add group members error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Remove member (admin only, or user can leave)
 router.delete('/:id/members/:memberId', auth, async (req, res) => {
   try {
-    const group = await Group.findById(req.params.id);
+    const group = await getGroupById(req.params.id);
     if (!group) return res.status(404).json({ error: 'Group not found' });
 
-    const actorId = req.userId.toString();
-    const memberId = req.params.memberId.toString();
-    const actorIsAdmin = isAdmin(group, actorId);
+    const actorId = String(req.userId);
+    const memberId = String(req.params.memberId);
+
+    const members = (group.members || []).map(String);
+    const admins = (group.admins || []).map(String);
+
+    const actorIsAdmin = admins.includes(actorId);
     const isSelfLeave = actorId === memberId;
 
-    if (!group.members.some((id) => id.toString() === actorId)) {
+    if (!members.includes(actorId)) {
       return res.status(403).json({ error: 'Not a group member' });
     }
     if (!actorIsAdmin && !isSelfLeave) {
       return res.status(403).json({ error: 'Only admins can remove other members' });
     }
 
-    group.members = group.members.filter((id) => id.toString() !== memberId);
-    group.admins = group.admins.filter((id) => id.toString() !== memberId);
+    const nextMembers = members.filter((id) => id !== memberId);
+    const nextAdmins = admins.filter((id) => id !== memberId);
 
-    if (!group.members.length) {
-      await Group.findByIdAndDelete(group._id);
+    if (!nextMembers.length) {
+      await deleteGroup(group._id);
       return res.json({ deleted: true });
     }
 
-    if (!group.admins.length) {
-      group.admins = [group.members[0]];
-    }
+    const finalAdmins = nextAdmins.length ? nextAdmins : [nextMembers[0]];
+    const updated = await updateGroup(group._id, {
+      members: nextMembers,
+      admins: finalAdmins,
+    });
 
-    await group.save();
-    await group.populate('members admins createdBy', '-password');
-    res.json({ group });
+    const populated = await populateByUserFields(updated, ['members', 'admins', 'createdBy']);
+    return res.json({ group: populated });
   } catch (error) {
-    console.error('Remove group member error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Promote member to admin (admin only)
 router.post('/:id/admins/:memberId', auth, async (req, res) => {
   try {
-    const group = await Group.findById(req.params.id);
+    const group = await getGroupById(req.params.id);
     if (!group) return res.status(404).json({ error: 'Group not found' });
-    if (!group.members.some((id) => id.toString() === req.userId.toString())) {
+
+    const actorId = String(req.userId);
+    const memberId = String(req.params.memberId);
+
+    const members = (group.members || []).map(String);
+    const admins = (group.admins || []).map(String);
+
+    if (!members.includes(actorId)) {
       return res.status(403).json({ error: 'Not a group member' });
     }
-    if (!isAdmin(group, req.userId)) {
+    if (!admins.includes(actorId)) {
       return res.status(403).json({ error: 'Only admins can promote admins' });
     }
-
-    const memberId = req.params.memberId.toString();
-    if (!group.members.some((id) => id.toString() === memberId)) {
+    if (!members.includes(memberId)) {
       return res.status(400).json({ error: 'User is not a member of this group' });
     }
 
-    if (!group.admins.some((id) => id.toString() === memberId)) {
-      group.admins.push(memberId);
-      await group.save();
+    if (!admins.includes(memberId)) {
+      admins.push(memberId);
     }
 
-    await group.populate('members admins createdBy', '-password');
-    res.json({ group });
+    const updated = await updateGroup(group._id, { admins });
+    const populated = await populateByUserFields(updated, ['members', 'admins', 'createdBy']);
+    return res.json({ group: populated });
   } catch (error) {
-    console.error('Promote group admin error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Demote admin (admin only, cannot remove last admin)
 router.delete('/:id/admins/:memberId', auth, async (req, res) => {
   try {
-    const group = await Group.findById(req.params.id);
+    const group = await getGroupById(req.params.id);
     if (!group) return res.status(404).json({ error: 'Group not found' });
-    if (!group.members.some((id) => id.toString() === req.userId.toString())) {
+
+    const actorId = String(req.userId);
+    const memberId = String(req.params.memberId);
+
+    const members = (group.members || []).map(String);
+    const admins = (group.admins || []).map(String);
+
+    if (!members.includes(actorId)) {
       return res.status(403).json({ error: 'Not a group member' });
     }
-    if (!isAdmin(group, req.userId)) {
+    if (!admins.includes(actorId)) {
       return res.status(403).json({ error: 'Only admins can demote admins' });
     }
 
-    const memberId = req.params.memberId.toString();
-    group.admins = group.admins.filter((id) => id.toString() !== memberId);
-
-    if (!group.admins.length) {
+    const nextAdmins = admins.filter((id) => id !== memberId);
+    if (!nextAdmins.length) {
       return res.status(400).json({ error: 'Group must have at least one admin' });
     }
 
-    await group.save();
-    await group.populate('members admins createdBy', '-password');
-    res.json({ group });
+    const updated = await updateGroup(group._id, { admins: nextAdmins });
+    const populated = await populateByUserFields(updated, ['members', 'admins', 'createdBy']);
+    return res.json({ group: populated });
   } catch (error) {
-    console.error('Demote group admin error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 

@@ -1,9 +1,16 @@
-﻿const express = require('express');
+const express = require('express');
 const { z } = require('zod');
+
 const auth = require('../middleware/auth');
 const upload = require('../middleware/upload');
-const Status = require('../models/Status');
-const ContactRequest = require('../models/ContactRequest');
+const {
+  createStatus,
+  listStatusesByUsers,
+  getStatusById,
+  updateStatus,
+  getAcceptedContactIds,
+  populateByUserFields,
+} = require('../services/store');
 
 const router = express.Router();
 
@@ -31,67 +38,50 @@ router.post('/', auth, upload.single('media'), async (req, res) => {
       return res.status(400).json({ error: 'Caption or media is required' });
     }
 
-    const status = await Status.create({
+    const status = await createStatus({
       user: req.userId,
       caption: parsed.data.caption,
       mediaUrl,
       mediaType,
+      views: [],
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     });
 
-    await status.populate('user views', '-password');
-    res.status(201).json({ status });
+    const populated = await populateByUserFields(status, ['user', 'views']);
+    return res.status(201).json({ status: populated });
   } catch (error) {
-    console.error('Create status error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
 router.get('/feed', auth, async (req, res) => {
   try {
-    const connections = await ContactRequest.find({
-      $or: [
-        { sender: req.userId, status: 'accepted' },
-        { receiver: req.userId, status: 'accepted' },
-      ],
-    });
-
-    const contactIds = connections.map((entry) =>
-      entry.sender.toString() === req.userId.toString() ? entry.receiver : entry.sender
-    );
-
-    const statuses = await Status.find({
-      user: { $in: [req.userId, ...contactIds] },
-      expiresAt: { $gt: new Date() },
-    })
-      .populate('user views', '-password')
-      .sort({ createdAt: -1 });
-
-    res.json({ statuses });
+    const contactIds = await getAcceptedContactIds(req.userId);
+    const statuses = await listStatusesByUsers([req.userId, ...contactIds]);
+    const populated = await populateByUserFields(statuses, ['user', 'views']);
+    return res.json({ statuses: populated });
   } catch (error) {
-    console.error('Status feed error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
 router.put('/:id/view', auth, async (req, res) => {
   try {
-    const status = await Status.findById(req.params.id);
+    const status = await getStatusById(req.params.id);
     if (!status) {
       return res.status(404).json({ error: 'Status not found' });
     }
 
-    if (!status.views.some((id) => id.toString() === req.userId.toString())) {
-      status.views.push(req.userId);
-      await status.save();
+    const views = new Set((status.views || []).map(String));
+    if (!views.has(req.userId)) {
+      views.add(req.userId);
+      await updateStatus(status._id, { views: Array.from(views) });
     }
 
-    res.json({ message: 'Viewed' });
+    return res.json({ message: 'Viewed' });
   } catch (error) {
-    console.error('Status view error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
 module.exports = router;
-

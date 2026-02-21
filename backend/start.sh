@@ -1,63 +1,37 @@
 #!/bin/bash
 
-echo "🚀 Starting WhatsApp Clone Backend"
-echo "=================================="
+echo "Starting WhatsApp Clone Backend (Firebase)"
+echo "========================================="
 echo ""
 
-# Check if Node.js is installed
 if ! command -v node &> /dev/null; then
-    echo "❌ Node.js is not installed!"
-    echo "   Please install Node.js from https://nodejs.org"
+    echo "Node.js is not installed"
     exit 1
 fi
 
-echo "✓ Node.js version: $(node --version)"
+echo "Node.js version: $(node --version)"
 
-# Check if npm is installed
 if ! command -v npm &> /dev/null; then
-    echo "❌ npm is not installed!"
+    echo "npm is not installed"
     exit 1
 fi
 
-echo "✓ npm version: $(npm --version)"
-
-# Check if MongoDB is running
-echo ""
-echo "Checking MongoDB connection..."
-if ! mongosh --eval "db.version()" --quiet &> /dev/null; then
-    echo "⚠️  MongoDB is not running!"
-    echo ""
-    echo "Please start MongoDB:"
-    echo "  macOS:   brew services start mongodb-community"
-    echo "  Linux:   sudo systemctl start mongod"
-    echo "  Windows: net start MongoDB"
-    echo "  Docker:  docker run -d -p 27017:27017 --name mongodb mongo"
-    echo ""
-    read -p "Press Enter once MongoDB is running..."
-fi
-
-echo "✓ MongoDB is running"
+echo "npm version: $(npm --version)"
 echo ""
 
-# Check if node_modules exists
 if [ ! -d "node_modules" ]; then
-    echo "📦 Installing dependencies..."
+    echo "Installing dependencies..."
     npm install
     echo ""
 fi
 
-# Check if .env exists
 if [ ! -f ".env" ]; then
-    echo "⚠️  .env file not found, using defaults"
+    echo ".env file not found. Create backend/.env with Firebase credentials."
+    exit 1
 fi
 
-# Start the server
-echo "🚀 Starting server..."
-echo ""
-echo "Backend will be available at: http://localhost:3000"
-echo ""
-echo "Press Ctrl+C to stop the server"
-echo "=================================="
+echo "Starting server..."
+echo "Backend URL: http://localhost:3000"
 echo ""
 
 npm start

@@ -1,0 +1,82 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(field) {
+      return isSignedIn() && request.auth.uid == resource.data[field];
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    match /contact_requests/{requestId} {
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.sender ||
+        request.auth.uid == resource.data.receiver
+      );
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.sender;
+      allow update: if isSignedIn() && (
+        request.auth.uid == resource.data.sender ||
+        request.auth.uid == resource.data.receiver
+      );
+      allow delete: if isSignedIn() && (
+        request.auth.uid == resource.data.sender ||
+        request.auth.uid == resource.data.receiver
+      );
+    }
+
+    match /blocked_users/{blockId} {
+      allow read, write: if isSignedIn() && request.auth.uid == request.resource.data.blocker;
+      allow get, delete: if isSignedIn() && request.auth.uid == resource.data.blocker;
+    }
+
+    match /messages/{messageId} {
+      allow read, update, delete: if isSignedIn() && (
+        request.auth.uid == resource.data.sender ||
+        request.auth.uid == resource.data.receiver
+      );
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.sender;
+    }
+
+    match /groups/{groupId} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.members;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.createdBy;
+      allow update, delete: if isSignedIn() && request.auth.uid in resource.data.admins;
+    }
+
+    match /channels/{channelId} {
+      allow read: if isSignedIn() && (
+        !resource.data.isPrivate || request.auth.uid in resource.data.subscribers
+      );
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.creator;
+      allow update, delete: if isSignedIn() && request.auth.uid in resource.data.admins;
+    }
+
+    match /statuses/{statusId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.user;
+      allow update, delete: if isSignedIn() && request.auth.uid == resource.data.user;
+    }
+
+    match /ai_settings/{userId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /device_sessions/{sessionId} {
+      allow read, write: if isSignedIn() && request.auth.uid == resource.data.user;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.user;
+    }
+
+    match /call_logs/{callId} {
+      allow read, write: if isSignedIn() && request.auth.uid in resource.data.participants;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.caller;
+    }
+  }
+}

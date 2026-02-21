@@ -1,5 +1,4 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -11,6 +10,7 @@ const path = require('path');
 
 const env = require('./config/env');
 const logger = require('./config/logger');
+const { getFirebaseApp } = require('./config/firebase');
 const errorHandler = require('./middleware/error-handler');
 const notFound = require('./middleware/not-found');
 
@@ -41,8 +41,6 @@ const io = new Server(server, {
   },
 });
 
-mongoose.set('strictQuery', true);
-
 const corsOptions = {
   origin(origin, callback) {
     if (isAllowedOrigin(origin)) {
@@ -60,7 +58,6 @@ const limiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Important for reverse proxies used by Render/Railway/Heroku.
 app.set('trust proxy', 1);
 app.use(helmet());
 app.use(compression());
@@ -89,6 +86,7 @@ const statusRoutes = require('./routes/status');
 const channelsRoutes = require('./routes/channels');
 const deviceSessionsRoutes = require('./routes/device-sessions');
 const callsRoutes = require('./routes/calls');
+const aiRoutes = require('./routes/ai');
 
 app.use('/auth', authRoutes);
 app.use('/contacts', contactsRoutes);
@@ -100,12 +98,14 @@ app.use('/status', statusRoutes);
 app.use('/channels', channelsRoutes);
 app.use('/devices', deviceSessionsRoutes);
 app.use('/calls', callsRoutes);
+app.use('/ai', aiRoutes);
 
 app.get('/', (req, res) => {
   res.json({
     message: 'ChatHeist API',
-    version: '1.0.0',
+    version: '2.0.0',
     status: 'running',
+    database: 'firestore',
     environment: env.nodeEnv,
   });
 });
@@ -118,14 +118,14 @@ app.use(errorHandler);
 
 async function startServer() {
   try {
-    await mongoose.connect(env.mongoUri);
-    logger.info('Connected to MongoDB');
+    getFirebaseApp();
+    logger.info('Connected to Firebase (Auth + Firestore)');
 
     server.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);
     });
   } catch (error) {
-    logger.error('MongoDB connection error', error);
+    logger.error('Firebase initialization error', error);
     process.exit(1);
   }
 }
@@ -140,7 +140,6 @@ async function shutdown(signal) {
       });
     });
 
-    await mongoose.connection.close();
     logger.info('Graceful shutdown complete');
     process.exit(0);
   } catch (error) {

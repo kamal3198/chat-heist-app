@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:mime/mime.dart';
 import 'package:http_parser/http_parser.dart';
@@ -11,13 +10,12 @@ import 'auth_service.dart';
 class MessageService extends ApiService {
   final AuthService _authService = AuthService();
 
-  // Get messages with a contact
   Future<List<Message>> getMessages(String contactId) async {
     try {
       final response = await get(
         '${ApiConfig.baseUrl}${ApiConfig.getMessages(contactId)}',
       );
-      
+
       if (isSuccess(response)) {
         final data = parseResponse(response);
         final List messages = data['messages'] ?? [];
@@ -30,13 +28,12 @@ class MessageService extends ApiService {
     }
   }
 
-  // Mark messages as read
   Future<bool> markMessagesAsRead(String contactId) async {
     try {
       final response = await put(
         '${ApiConfig.baseUrl}${ApiConfig.markMessagesAsRead(contactId)}',
       );
-      
+
       return isSuccess(response);
     } catch (e) {
       print('Mark as read error: $e');
@@ -57,19 +54,18 @@ class MessageService extends ApiService {
     }
   }
 
-  // Upload file
   Future<Map<String, dynamic>?> uploadFile(File file) async {
     try {
-      final token = await _authService.getToken();
-      if (token == null) return null;
+      final headers = await _authService.authHeaders(includeContentType: false);
+      if (!headers.containsKey('Authorization')) return null;
 
       final request = http.MultipartRequest(
         'POST',
         Uri.parse('${ApiConfig.baseUrl}${ApiConfig.uploadFile}'),
       );
 
-      request.headers['Authorization'] = 'Bearer $token';
-      
+      request.headers.addAll(headers);
+
       final mimeType = lookupMimeType(file.path) ?? 'application/octet-stream';
       final multipartFile = await http.MultipartFile.fromPath(
         'file',
@@ -81,7 +77,7 @@ class MessageService extends ApiService {
 
       final response = await request.send();
       final responseData = await response.stream.bytesToString();
-      
+
       if (response.statusCode == 200) {
         final data = parseResponse(http.Response(responseData, response.statusCode));
         return {
@@ -99,20 +95,20 @@ class MessageService extends ApiService {
   }
 
   Future<Map<String, dynamic>?> uploadFileBytes({
-    required Uint8List bytes,
+    required List<int> bytes,
     required String fileName,
     String? mimeType,
   }) async {
     try {
-      final token = await _authService.getToken();
-      if (token == null) return null;
+      final headers = await _authService.authHeaders(includeContentType: false);
+      if (!headers.containsKey('Authorization')) return null;
 
       final request = http.MultipartRequest(
         'POST',
         Uri.parse('${ApiConfig.baseUrl}${ApiConfig.uploadFile}'),
       );
 
-      request.headers['Authorization'] = 'Bearer $token';
+      request.headers.addAll(headers);
       final resolvedMime = mimeType ?? lookupMimeType(fileName) ?? 'application/octet-stream';
 
       request.files.add(

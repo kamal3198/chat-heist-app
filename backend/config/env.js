@@ -1,35 +1,26 @@
 const path = require('path');
 const dotenv = require('dotenv');
 
-const cwdEnvPath = path.resolve(process.cwd(), '.env');
-const localEnvPath = path.resolve(__dirname, '..', '.env');
-const loaded = dotenv.config({ path: cwdEnvPath });
-if (loaded.error) {
-  dotenv.config({ path: localEnvPath });
-}
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
 const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 3000),
-  mongoUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/chatheist',
-  jwtSecret: process.env.JWT_SECRET || 'change_this_in_production',
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:8080')
+  corsOrigins: (process.env.CORS_ORIGINS || '*')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean),
   rateLimitWindowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
-  rateLimitMax: Number(process.env.RATE_LIMIT_MAX || 300),
-  stunUrls: (process.env.STUN_URLS || 'stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302')
-    .split(',')
-    .map((url) => url.trim())
-    .filter(Boolean),
-  turnUrls: (process.env.TURN_URLS || '')
-    .split(',')
-    .map((url) => url.trim())
-    .filter(Boolean),
-  turnUsername: process.env.TURN_USERNAME || '',
-  turnCredential: process.env.TURN_CREDENTIAL || '',
+  rateLimitMax: Number(process.env.RATE_LIMIT_MAX || 500),
+  firebaseServiceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '',
+  firebaseServiceAccountBase64: process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 || '',
+  firebaseServiceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || '',
+  firebaseProjectId: process.env.FIREBASE_PROJECT_ID || '',
+  firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL || '',
+  firebasePrivateKey: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
+  firebaseStorageBucket: process.env.FIREBASE_STORAGE_BUCKET || '',
+  logLevel: process.env.LOG_LEVEL || 'info',
 };
 
 module.exports = env;

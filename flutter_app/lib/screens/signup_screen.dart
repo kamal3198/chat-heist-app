@@ -13,6 +13,7 @@ class SignupScreen extends StatefulWidget {
 class _SignupScreenState extends State<SignupScreen> {
   final _formKey = GlobalKey<FormState>();
   final _usernameController = TextEditingController();
+  final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   bool _obscurePassword = true;
@@ -21,6 +22,7 @@ class _SignupScreenState extends State<SignupScreen> {
   @override
   void dispose() {
     _usernameController.dispose();
+    _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
@@ -30,9 +32,10 @@ class _SignupScreenState extends State<SignupScreen> {
     if (!_formKey.currentState!.validate()) return;
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    
+
     final success = await authProvider.register(
       _usernameController.text.trim(),
+      _emailController.text.trim(),
       _passwordController.text,
     );
 
@@ -71,14 +74,13 @@ class _SignupScreenState extends State<SignupScreen> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // App Logo
                       Icon(
                         Icons.chat_bubble,
                         size: 80,
                         color: Theme.of(context).colorScheme.primary,
                       ),
                       const SizedBox(height: 16),
-                      
+
                       Text(
                         'Create Account',
                         textAlign: TextAlign.center,
@@ -90,7 +92,7 @@ class _SignupScreenState extends State<SignupScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Sign up to get started',
+                        'Sign up with Firebase Authentication',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 16,
@@ -98,8 +100,7 @@ class _SignupScreenState extends State<SignupScreen> {
                         ),
                       ),
                       const SizedBox(height: 32),
-                      
-                      // Username Field
+
                       TextFormField(
                         controller: _usernameController,
                         decoration: InputDecoration(
@@ -124,8 +125,30 @@ class _SignupScreenState extends State<SignupScreen> {
                         },
                       ),
                       const SizedBox(height: 16),
-                      
-                      // Password Field
+
+                      TextFormField(
+                        controller: _emailController,
+                        decoration: InputDecoration(
+                          labelText: 'Email',
+                          prefixIcon: const Icon(Icons.email),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        keyboardType: TextInputType.emailAddress,
+                        textInputAction: TextInputAction.next,
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter email';
+                          }
+                          if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(value.trim())) {
+                            return 'Please enter a valid email';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+
                       TextFormField(
                         controller: _passwordController,
                         obscureText: _obscurePassword,
@@ -134,8 +157,8 @@ class _SignupScreenState extends State<SignupScreen> {
                           prefixIcon: const Icon(Icons.lock),
                           suffixIcon: IconButton(
                             icon: Icon(
-                              _obscurePassword 
-                                  ? Icons.visibility 
+                              _obscurePassword
+                                  ? Icons.visibility
                                   : Icons.visibility_off,
                             ),
                             onPressed: () {
@@ -160,8 +183,7 @@ class _SignupScreenState extends State<SignupScreen> {
                         },
                       ),
                       const SizedBox(height: 16),
-                      
-                      // Confirm Password Field
+
                       TextFormField(
                         controller: _confirmPasswordController,
                         obscureText: _obscureConfirmPassword,
@@ -170,8 +192,8 @@ class _SignupScreenState extends State<SignupScreen> {
                           prefixIcon: const Icon(Icons.lock_outline),
                           suffixIcon: IconButton(
                             icon: Icon(
-                              _obscureConfirmPassword 
-                                  ? Icons.visibility 
+                              _obscureConfirmPassword
+                                  ? Icons.visibility
                                   : Icons.visibility_off,
                             ),
                             onPressed: () {
@@ -197,8 +219,7 @@ class _SignupScreenState extends State<SignupScreen> {
                         },
                       ),
                       const SizedBox(height: 24),
-                      
-                      // Sign Up Button
+
                       ElevatedButton(
                         onPressed: authProvider.isLoading ? null : _signup,
                         style: ElevatedButton.styleFrom(
@@ -227,8 +248,7 @@ class _SignupScreenState extends State<SignupScreen> {
                               ),
                       ),
                       const SizedBox(height: 16),
-                      
-                      // Back to Login Link
+
                       TextButton(
                         onPressed: authProvider.isLoading
                             ? null

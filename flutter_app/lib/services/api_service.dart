@@ -6,11 +6,7 @@ class ApiService {
   final AuthService _authService = AuthService();
 
   Future<Map<String, String>> _getHeaders() async {
-    final token = await _authService.getToken();
-    return {
-      'Content-Type': 'application/json',
-      if (token != null) 'Authorization': 'Bearer $token',
-    };
+    return _authService.authHeaders();
   }
 
   Future<http.Response> get(String url) async {

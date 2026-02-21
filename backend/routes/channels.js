@@ -1,7 +1,17 @@
-﻿const express = require('express');
+const express = require('express');
 const { z } = require('zod');
+
 const auth = require('../middleware/auth');
-const Channel = require('../models/Channel');
+const {
+  createChannel,
+  getChannelById,
+  updateChannel,
+  deleteChannel,
+  listChannelsForSubscriber,
+  discoverChannels,
+  populateByUserFields,
+  now,
+} = require('../services/store');
 
 const router = express.Router();
 
@@ -23,86 +33,82 @@ router.post('/', auth, async (req, res) => {
       return res.status(400).json({ error: 'Invalid payload', details: parsed.error.flatten() });
     }
 
-    const channel = await Channel.create({
+    const channel = await createChannel({
       ...parsed.data,
+      avatar: '',
       creator: req.userId,
       admins: [req.userId],
       subscribers: [req.userId],
+      posts: [],
     });
 
-    await channel.populate('creator admins subscribers posts.author', '-password');
-    res.status(201).json({ channel });
+    const populated = await populateByUserFields(channel, ['creator', 'admins', 'subscribers']);
+    return res.status(201).json({ channel: populated });
   } catch (error) {
-    console.error('Create channel error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
 router.get('/', auth, async (req, res) => {
   try {
-    const channels = await Channel.find({ subscribers: req.userId })
-      .populate('creator admins subscribers posts.author', '-password')
-      .sort({ updatedAt: -1 });
-    res.json({ channels });
+    const channels = await listChannelsForSubscriber(req.userId);
+    const populated = await populateByUserFields(channels, ['creator', 'admins', 'subscribers']);
+    return res.json({ channels: populated });
   } catch (error) {
-    console.error('List channels error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
 router.get('/discover', auth, async (req, res) => {
   try {
-    const channels = await Channel.find({ isPrivate: false })
-      .populate('creator admins subscribers posts.author', '-password')
-      .sort({ updatedAt: -1 })
-      .limit(100);
-    res.json({ channels });
+    const channels = await discoverChannels(100);
+    const populated = await populateByUserFields(channels, ['creator', 'admins', 'subscribers']);
+    return res.json({ channels: populated });
   } catch (error) {
-    console.error('Discover channels error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
 router.post('/:id/join', auth, async (req, res) => {
   try {
-    const channel = await Channel.findById(req.params.id);
+    const channel = await getChannelById(req.params.id);
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
     if (channel.isPrivate) return res.status(403).json({ error: 'Private channel' });
 
-    if (!channel.subscribers.some((id) => id.toString() === req.userId.toString())) {
-      channel.subscribers.push(req.userId);
-      await channel.save();
-    }
+    const subscribers = Array.from(new Set([...(channel.subscribers || []).map(String), req.userId]));
+    const updated = await updateChannel(channel._id, { subscribers });
 
-    await channel.populate('creator admins subscribers posts.author', '-password');
-    res.json({ channel });
+    const populated = await populateByUserFields(updated, ['creator', 'admins', 'subscribers']);
+    return res.json({ channel: populated });
   } catch (error) {
-    console.error('Join channel error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
 router.post('/:id/leave', auth, async (req, res) => {
   try {
-    const channel = await Channel.findById(req.params.id);
+    const channel = await getChannelById(req.params.id);
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
 
-    channel.subscribers = channel.subscribers.filter((id) => id.toString() !== req.userId.toString());
-    channel.admins = channel.admins.filter((id) => id.toString() !== req.userId.toString());
+    const uid = String(req.userId);
+    const subscribers = (channel.subscribers || []).map(String).filter((id) => id !== uid);
+    const admins = (channel.admins || []).map(String).filter((id) => id !== uid);
 
-    if (!channel.subscribers.length) {
-      await channel.deleteOne();
+    if (!subscribers.length) {
+      await deleteChannel(channel._id);
       return res.json({ message: 'Channel removed' });
     }
 
-    if (!channel.admins.length) channel.admins = [channel.creator];
+    const nextAdmins = admins.length ? admins : [String(channel.creator)];
+    const updated = await updateChannel(channel._id, {
+      subscribers,
+      admins: nextAdmins,
+    });
 
-    await channel.save();
-    await channel.populate('creator admins subscribers posts.author', '-password');
-    res.json({ channel });
+    const populated = await populateByUserFields(updated, ['creator', 'admins', 'subscribers']);
+    return res.json({ channel: populated });
   } catch (error) {
-    console.error('Leave channel error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
@@ -113,23 +119,33 @@ router.post('/:id/posts', auth, async (req, res) => {
       return res.status(400).json({ error: 'Invalid payload', details: parsed.error.flatten() });
     }
 
-    const channel = await Channel.findById(req.params.id);
+    const channel = await getChannelById(req.params.id);
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
 
-    const isAdmin = channel.admins.some((id) => id.toString() === req.userId.toString());
-    if (!isAdmin) return res.status(403).json({ error: 'Only admins can publish posts' });
-    if (!parsed.data.text) return res.status(400).json({ error: 'Post text is required' });
+    const admins = (channel.admins || []).map(String);
+    if (!admins.includes(req.userId)) {
+      return res.status(403).json({ error: 'Only admins can publish posts' });
+    }
+    if (!parsed.data.text) {
+      return res.status(400).json({ error: 'Post text is required' });
+    }
 
-    channel.posts.unshift({ author: req.userId, text: parsed.data.text, createdAt: new Date() });
-    await channel.save();
-    await channel.populate('creator admins subscribers posts.author', '-password');
+    const post = {
+      _id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+      author: req.userId,
+      text: parsed.data.text,
+      mediaUrl: null,
+      createdAt: now(),
+    };
 
-    res.status(201).json({ channel, post: channel.posts[0] });
+    const posts = [post, ...((channel.posts || []).slice(0, 199))];
+    const updated = await updateChannel(channel._id, { posts });
+    const populated = await populateByUserFields(updated, ['creator', 'admins', 'subscribers']);
+
+    return res.status(201).json({ channel: populated, post: populated.posts[0] });
   } catch (error) {
-    console.error('Create channel post error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
 module.exports = router;
-

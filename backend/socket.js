@@ -1,8 +1,15 @@
-﻿const Message = require('./models/Message');
-const User = require('./models/User');
-const ContactRequest = require('./models/ContactRequest');
-const BlockedUser = require('./models/BlockedUser');
-const CallLog = require('./models/CallLog');
+const {
+  getCallLog,
+  upsertCallLog,
+  createMessage,
+  populateByUserFields,
+  getContactRequestByPair,
+  isEitherBlocked,
+  getUserById,
+  updateUser,
+  markConversationRead,
+  getAcceptedContactIds,
+} = require('./services/store');
 const logger = require('./config/logger');
 
 function setupSocket(io) {
@@ -31,21 +38,17 @@ function setupSocket(io) {
   }
 
   async function markCallConnected(callId, acceptedBy) {
-    await CallLog.findOneAndUpdate(
-      { callId },
-      {
-        $set: {
-          status: 'accepted',
-          connectedAt: new Date(),
-        },
-      }
-    );
+    await upsertCallLog(callId, {
+      status: 'accepted',
+      connectedAt: new Date(),
+    });
     clearCallTimeout(callId);
 
-    const call = await CallLog.findOne({ callId }).lean();
+    const call = await getCallLog(callId);
     if (!call) return;
 
-    for (const participantId of call.participants.map((id) => id.toString())) {
+    const participants = (call.participants || []).map(String);
+    for (const participantId of participants) {
       emitToUser(participantId, 'callConnected', {
         callId,
         connectedBy: acceptedBy,
@@ -60,20 +63,21 @@ function setupSocket(io) {
   }
 
   async function markCallFinal(callId, status, endedBy = null) {
-    const call = await CallLog.findOne({ callId });
+    const call = await getCallLog(callId);
     if (!call) return;
     if (call.status === 'ended') return;
 
     const endedAt = new Date();
-    const baseStart = call.connectedAt || call.startedAt;
-    const durationSeconds = Math.max(0, Math.floor((endedAt.getTime() - baseStart.getTime()) / 1000));
+    const baseStart = call.connectedAt || call.startedAt || endedAt;
+    const durationSeconds = Math.max(0, Math.floor((endedAt.getTime() - new Date(baseStart).getTime()) / 1000));
 
-    call.status = status;
-    call.endedAt = endedAt;
-    call.durationSeconds = status === 'accepted' || status === 'ended' ? durationSeconds : call.durationSeconds;
-    if (endedBy) call.endedBy = endedBy;
+    await upsertCallLog(callId, {
+      status,
+      endedAt,
+      durationSeconds: status === 'accepted' || status === 'ended' ? durationSeconds : call.durationSeconds || 0,
+      ...(endedBy ? { endedBy } : {}),
+    });
 
-    await call.save();
     clearCallTimeout(callId);
   }
 
@@ -92,19 +96,19 @@ function setupSocket(io) {
 
     socket.on('registerUser', async (userId) => {
       try {
-        const userKey = userId.toString();
+        const userKey = String(userId);
         ensureUserSet(userKey).add(socket.id);
 
-        await User.findByIdAndUpdate(userId, {
+        await updateUser(userKey, {
           socketId: socket.id,
           isOnline: true,
           lastSeen: new Date(),
         });
 
-        const contacts = await getAcceptedContacts(userId);
-        contacts.forEach((contactId) => emitToUser(contactId.toString(), 'userOnline', { userId }));
+        const contacts = await getAcceptedContactIds(userKey);
+        contacts.forEach((contactId) => emitToUser(String(contactId), 'userOnline', { userId: userKey }));
       } catch (error) {
-        console.error('Register user error:', error);
+        logger.error('Register user error:', error);
       }
     });
 
@@ -112,33 +116,21 @@ function setupSocket(io) {
       try {
         const { senderId, receiverId, text, fileUrl, fileName, fileType, clientMessageId } = data;
 
-        const isContact = await ContactRequest.findOne({
-          $or: [
-            { sender: senderId, receiver: receiverId, status: 'accepted' },
-            { sender: receiverId, receiver: senderId, status: 'accepted' },
-          ],
-        });
-
-        if (!isContact) {
+        const relation = await getContactRequestByPair(senderId, receiverId);
+        if (!relation || relation.status !== 'accepted') {
           socket.emit('error', { message: 'Not contacts' });
           return;
         }
 
-        const isBlocked = await BlockedUser.findOne({
-          $or: [
-            { blocker: senderId, blocked: receiverId },
-            { blocker: receiverId, blocked: senderId },
-          ],
-        });
-
+        const isBlocked = await isEitherBlocked(senderId, receiverId);
         if (isBlocked) {
           socket.emit('error', { message: 'Cannot send message' });
           return;
         }
 
-        const receiverSockets = activeUsers.get(receiverId.toString());
+        const receiverSockets = activeUsers.get(String(receiverId));
 
-        const message = new Message({
+        const message = await createMessage({
           sender: senderId,
           receiver: receiverId,
           text: text || '',
@@ -149,29 +141,27 @@ function setupSocket(io) {
           status: receiverSockets && receiverSockets.size ? 'delivered' : 'sent',
         });
 
-        await message.save();
-        await message.populate('sender receiver', '-password');
+        const populatedMessage = await populateByUserFields(message, ['sender', 'receiver']);
 
-        socket.emit('messageSent', { message });
-        emitToUser(receiverId.toString(), 'receiveMessage', { message });
+        socket.emit('messageSent', { message: populatedMessage });
+        emitToUser(String(receiverId), 'receiveMessage', { message: populatedMessage });
 
-        const receiver = await User.findById(receiverId).select('aiSettings');
+        const receiver = await getUserById(receiverId, true);
         const aiReply = autoReplyText(receiver?.aiSettings);
         if (aiReply && !fileUrl) {
-          const autoMessage = new Message({
+          const autoMessage = await createMessage({
             sender: receiverId,
             receiver: senderId,
             text: aiReply,
-            status: activeUsers.get(senderId.toString())?.size ? 'delivered' : 'sent',
+            status: activeUsers.get(String(senderId))?.size ? 'delivered' : 'sent',
           });
-          await autoMessage.save();
-          await autoMessage.populate('sender receiver', '-password');
+          const populatedAuto = await populateByUserFields(autoMessage, ['sender', 'receiver']);
 
-          emitToUser(senderId.toString(), 'receiveMessage', { message: autoMessage });
-          emitToUser(receiverId.toString(), 'messageSent', { message: autoMessage });
+          emitToUser(String(senderId), 'receiveMessage', { message: populatedAuto });
+          emitToUser(String(receiverId), 'messageSent', { message: populatedAuto });
         }
       } catch (error) {
-        console.error('Send message error:', error);
+        logger.error('Send message error:', error);
         socket.emit('error', { message: 'Failed to send message' });
       }
     });
@@ -179,9 +169,9 @@ function setupSocket(io) {
     socket.on('typing', async (data) => {
       try {
         const { senderId, receiverId, isTyping } = data;
-        emitToUser(receiverId.toString(), 'userTyping', { userId: senderId, isTyping });
+        emitToUser(String(receiverId), 'userTyping', { userId: senderId, isTyping });
       } catch (error) {
-        console.error('Typing error:', error);
+        logger.error('Typing error:', error);
       }
     });
 
@@ -189,34 +179,28 @@ function setupSocket(io) {
       try {
         const { callId, callerId, participantIds = [], isGroup = false } = data;
         const targets = Array.isArray(participantIds)
-          ? participantIds.filter((id) => id && id !== callerId)
+          ? participantIds.filter((id) => id && String(id) !== String(callerId)).map(String)
           : [];
-        const allParticipants = [callerId, ...targets];
+        const allParticipants = Array.from(new Set([String(callerId), ...targets]));
 
-        await CallLog.findOneAndUpdate(
-          { callId },
-          {
-            $set: {
-              callId,
-              callerId: callerId.toString(),
-              receiverId: !isGroup && targets.length ? targets[0].toString() : '',
-              caller: callerId,
-              receiver: !isGroup && targets.length ? targets[0] : null,
-              participants: allParticipants,
-              isGroup,
-              status: 'calling',
-              startedAt: new Date(),
-              connectedAt: null,
-              endedAt: null,
-              durationSeconds: 0,
-              endedBy: null,
-            },
-          },
-          { upsert: true, new: true, setDefaultsOnInsert: true }
-        );
+        await upsertCallLog(callId, {
+          callId: String(callId),
+          callerId: String(callerId),
+          receiverId: !isGroup && targets.length ? String(targets[0]) : '',
+          caller: String(callerId),
+          receiver: !isGroup && targets.length ? String(targets[0]) : null,
+          participants: allParticipants,
+          isGroup,
+          status: 'calling',
+          startedAt: new Date(),
+          connectedAt: null,
+          endedAt: null,
+          durationSeconds: 0,
+          endedBy: null,
+        });
 
         for (const targetId of targets) {
-          emitToUser(targetId.toString(), 'incomingCall', {
+          emitToUser(String(targetId), 'incomingCall', {
             callId,
             callerId,
             participantIds: allParticipants,
@@ -234,12 +218,11 @@ function setupSocket(io) {
         });
 
         const timeout = setTimeout(async () => {
-          const call = await CallLog.findOne({ callId });
-          if (!call) return;
-          if (call.status !== 'calling') return;
+          const call = await getCallLog(callId);
+          if (!call || call.status !== 'calling') return;
 
           await markCallFinal(callId, 'missed');
-          for (const participantId of call.participants.map((id) => id.toString())) {
+          for (const participantId of (call.participants || []).map(String)) {
             emitToUser(participantId, 'callMissed', {
               callId,
               at: new Date().toISOString(),
@@ -257,7 +240,7 @@ function setupSocket(io) {
     socket.on('acceptCall', async (data) => {
       try {
         const { callId, userId } = data;
-        const call = await CallLog.findOne({ callId });
+        const call = await getCallLog(callId);
         if (!call || call.status === 'ended') return;
         await markCallConnected(callId, userId);
       } catch (error) {
@@ -270,9 +253,9 @@ function setupSocket(io) {
         const { callId, userId, participantIds = [] } = data;
         await markCallFinal(callId, 'rejected', userId);
 
-        const recipients = participantIds.filter((id) => id && id !== userId);
+        const recipients = participantIds.filter((id) => id && String(id) !== String(userId));
         for (const targetId of recipients) {
-          emitToUser(targetId.toString(), 'callRejected', { callId, userId });
+          emitToUser(String(targetId), 'callRejected', { callId, userId });
         }
       } catch (error) {
         logger.error('Reject call error:', error);
@@ -282,15 +265,17 @@ function setupSocket(io) {
     socket.on('endCall', async (data) => {
       try {
         const { callId, userId, participantIds = [] } = data;
-        const call = await CallLog.findOne({ callId }).select('status participants');
+        const call = await getCallLog(callId);
         if (!call || call.status === 'ended') return;
+
         await markCallFinal(callId, 'ended', userId);
 
-        const fromParticipants = participantIds.filter((id) => id && id !== userId);
-        const fromDb = call.participants.map((id) => id.toString()).filter((id) => id && id !== userId);
+        const fromParticipants = participantIds.filter((id) => id && String(id) !== String(userId)).map(String);
+        const fromDb = (call.participants || []).map(String).filter((id) => id !== String(userId));
         const recipients = Array.from(new Set([...fromParticipants, ...fromDb]));
+
         for (const targetId of recipients) {
-          emitToUser(targetId.toString(), 'callEnded', {
+          emitToUser(String(targetId), 'callEnded', {
             callId,
             endedBy: userId,
             endedAt: new Date().toISOString(),
@@ -314,20 +299,15 @@ function setupSocket(io) {
 
         if (!callId || !fromUserId || !toUserId || !type) return;
 
-        const call = await CallLog.findOne({
-          callId,
-          participants: fromUserId,
-        }).select('_id participants');
-
+        const call = await getCallLog(callId);
         if (!call) return;
 
-        const isRecipientInCall = call.participants.some(
-          (participantId) => participantId.toString() === toUserId.toString()
-        );
+        const participants = (call.participants || []).map(String);
+        if (!participants.includes(String(fromUserId)) || !participants.includes(String(toUserId))) {
+          return;
+        }
 
-        if (!isRecipientInCall) return;
-
-        emitToUser(toUserId.toString(), 'callSignal', {
+        emitToUser(String(toUserId), 'callSignal', {
           callId,
           fromUserId,
           toUserId,
@@ -343,13 +323,10 @@ function setupSocket(io) {
     socket.on('markAsRead', async (data) => {
       try {
         const { userId, contactId } = data;
-        await Message.updateMany(
-          { sender: contactId, receiver: userId, status: { $ne: 'read' } },
-          { $set: { status: 'read' } }
-        );
-        emitToUser(contactId.toString(), 'messagesRead', { readBy: userId });
+        await markConversationRead(userId, contactId);
+        emitToUser(String(contactId), 'messagesRead', { readBy: userId });
       } catch (error) {
-        console.error('Mark as read error:', error);
+        logger.error('Mark as read error:', error);
       }
     });
 
@@ -367,14 +344,14 @@ function setupSocket(io) {
 
         if (disconnectedUserId) {
           const stillOnline = activeUsers.has(disconnectedUserId);
-          await User.findByIdAndUpdate(disconnectedUserId, {
+          await updateUser(disconnectedUserId, {
             ...(stillOnline ? { isOnline: true } : { isOnline: false, lastSeen: new Date() }),
           });
 
           if (!stillOnline) {
-            const contacts = await getAcceptedContacts(disconnectedUserId);
+            const contacts = await getAcceptedContactIds(disconnectedUserId);
             contacts.forEach((contactId) => {
-              emitToUser(contactId.toString(), 'userOffline', {
+              emitToUser(String(contactId), 'userOffline', {
                 userId: disconnectedUserId,
                 lastSeen: new Date(),
               });
@@ -382,23 +359,10 @@ function setupSocket(io) {
           }
         }
       } catch (error) {
-        console.error('Disconnect error:', error);
+        logger.error('Disconnect error:', error);
       }
     });
   });
-
-  async function getAcceptedContacts(userId) {
-    const requests = await ContactRequest.find({
-      $or: [
-        { sender: userId, status: 'accepted' },
-        { receiver: userId, status: 'accepted' },
-      ],
-    });
-
-    return requests.map((request) =>
-      request.sender.toString() === userId.toString() ? request.receiver : request.sender
-    );
-  }
 }
 
 module.exports = setupSocket;

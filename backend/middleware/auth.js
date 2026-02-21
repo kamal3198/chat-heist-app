@@ -1,47 +1,44 @@
-﻿const jwt = require('jsonwebtoken');
-const User = require('../models/User');
-const DeviceSession = require('../models/DeviceSession');
-const env = require('../config/env');
+const { getAuth } = require('../config/firebase');
+const {
+  getUserById,
+  getDeviceSessionById,
+  touchDeviceSession,
+} = require('../services/store');
 
 const auth = async (req, res, next) => {
   try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
-
+    const token = req.header('Authorization')?.replace('Bearer ', '').trim();
     if (!token) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const decoded = jwt.verify(token, env.jwtSecret);
+    const decoded = await getAuth().verifyIdToken(token);
+    const userId = String(decoded.uid);
 
-    if (decoded.sid) {
-      const activeSession = await DeviceSession.findOne({
-        _id: decoded.sid,
-        user: decoded.userId,
-        isActive: true,
-      });
-
-      if (!activeSession) {
+    const sessionIdHeader = req.header('x-session-id') || req.header('X-Session-Id') || null;
+    if (sessionIdHeader) {
+      const session = await getDeviceSessionById(sessionIdHeader);
+      if (!session || !session.isActive || String(session.user) !== userId) {
         return res.status(401).json({ error: 'Session expired or revoked' });
       }
-
-      activeSession.lastActiveAt = new Date();
-      await activeSession.save();
-      req.sessionId = activeSession._id.toString();
+      await touchDeviceSession(sessionIdHeader);
+      req.sessionId = sessionIdHeader;
+    } else {
+      req.sessionId = null;
     }
 
-    const user = await User.findById(decoded.userId);
-
+    const user = await getUserById(userId, false);
     if (!user) {
-      return res.status(401).json({ error: 'User not found' });
+      return res.status(401).json({ error: 'User profile not found' });
     }
 
+    req.userId = userId;
     req.user = user;
-    req.userId = user._id;
+    req.firebaseUser = decoded;
     next();
   } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
+    return res.status(401).json({ error: 'Invalid token' });
   }
 };
 
 module.exports = auth;
-

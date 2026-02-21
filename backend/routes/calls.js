@@ -1,7 +1,8 @@
 const express = require('express');
+
 const auth = require('../middleware/auth');
-const CallLog = require('../models/CallLog');
 const env = require('../config/env');
+const { listCallLogsForUser, populateByUserFields } = require('../services/store');
 
 const router = express.Router();
 
@@ -10,15 +11,12 @@ router.get('/history', auth, async (req, res) => {
     const userId = req.userId;
     const limit = Math.min(Number(req.query.limit || 100), 300);
 
-    const logs = await CallLog.find({ participants: userId })
-      .populate('caller participants endedBy', '-password')
-      .sort({ startedAt: -1 })
-      .limit(limit);
+    const logs = await listCallLogsForUser(userId, limit);
+    const populated = await populateByUserFields(logs, ['caller', 'participants', 'endedBy']);
 
-    res.json({ calls: logs });
+    return res.json({ calls: populated });
   } catch (error) {
-    console.error('Get call history error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
@@ -42,10 +40,9 @@ router.get('/ice-servers', auth, async (req, res) => {
       iceServers.push({ urls: ['stun:stun.l.google.com:19302'] });
     }
 
-    res.json({ iceServers });
+    return res.json({ iceServers });
   } catch (error) {
-    console.error('Get ICE servers error:', error);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 

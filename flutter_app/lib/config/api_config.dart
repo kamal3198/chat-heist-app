@@ -1,4 +1,4 @@
-﻿import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart';
 
 class ApiConfig {
   static const String _envBaseUrl =
@@ -41,6 +41,8 @@ class ApiConfig {
 
   static const String login = '/auth/login';
   static const String register = '/auth/register';
+  static const String loginGoogle = '/auth/google';
+  static const String firebaseSession = '/auth/firebase';
   static const String getCurrentUser = '/auth/me';
 
   static const String getContacts = '/contacts';
@@ -88,5 +90,3 @@ class ApiConfig {
   static const String callsHistory = '/calls/history';
   static const String callsIceServers = '/calls/ice-servers';
 }
-
-

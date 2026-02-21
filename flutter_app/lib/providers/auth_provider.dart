@@ -17,7 +17,6 @@ class AuthProvider with ChangeNotifier {
   String? get error => _error;
   bool get isAuthenticated => _currentUser != null;
 
-  // Initialize - check if user is logged in
   Future<bool> initialize() async {
     _isLoading = true;
     notifyListeners();
@@ -29,9 +28,8 @@ class AuthProvider with ChangeNotifier {
         if (_currentUser != null) {
           _socketService.connect(_currentUser!.id);
           return true;
-        } else {
-          _error = 'Saved session is invalid. Please login again.';
         }
+        _error = 'Saved session is invalid. Please login again.';
       }
       return false;
     } catch (e) {
@@ -43,27 +41,26 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
-  // Login
-  Future<bool> login(String username, String password) async {
+  Future<bool> login(String email, String password) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
-      final result = await _authService.login(username, password);
-      
+      final result = await _authService.login(email, password);
+
       if (result['success']) {
         _currentUser = result['user'];
         _socketService.connect(_currentUser!.id);
         _isLoading = false;
         notifyListeners();
         return true;
-      } else {
-        _error = result['error'];
-        _isLoading = false;
-        notifyListeners();
-        return false;
       }
+
+      _error = result['error'];
+      _isLoading = false;
+      notifyListeners();
+      return false;
     } catch (e) {
       _error = e.toString();
       _isLoading = false;
@@ -72,27 +69,26 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
-  // Register
-  Future<bool> register(String username, String password) async {
+  Future<bool> register(String username, String email, String password) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
-      final result = await _authService.register(username, password);
-      
+      final result = await _authService.register(username, email, password);
+
       if (result['success']) {
         _currentUser = result['user'];
         _socketService.connect(_currentUser!.id);
         _isLoading = false;
         notifyListeners();
         return true;
-      } else {
-        _error = result['error'];
-        _isLoading = false;
-        notifyListeners();
-        return false;
       }
+
+      _error = result['error'];
+      _isLoading = false;
+      notifyListeners();
+      return false;
     } catch (e) {
       _error = e.toString();
       _isLoading = false;
@@ -101,7 +97,33 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
-  // Logout
+  Future<bool> loginWithGoogle() async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final result = await _authService.signInWithGoogle();
+      if (result['success']) {
+        _currentUser = result['user'];
+        _socketService.connect(_currentUser!.id);
+        _isLoading = false;
+        notifyListeners();
+        return true;
+      }
+
+      _error = result['error'];
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _error = e.toString();
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
   Future<void> logout() async {
     _socketService.disconnect();
     await _authService.logout();
@@ -137,13 +159,11 @@ class AuthProvider with ChangeNotifier {
     return false;
   }
 
-  // Clear error
   void clearError() {
     _error = null;
     notifyListeners();
   }
 
-  // Update user online status
   void updateUserStatus(bool isOnline) {
     if (_currentUser != null) {
       _currentUser = _currentUser!.copyWith(

@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../config/api_config.dart';
 import '../providers/auth_provider.dart';
@@ -14,13 +14,13 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _usernameController = TextEditingController();
+  final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
 
   @override
   void dispose() {
-    _usernameController.dispose();
+    _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
@@ -29,9 +29,9 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!_formKey.currentState!.validate()) return;
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    
+
     final success = await authProvider.login(
-      _usernameController.text.trim(),
+      _emailController.text.trim(),
       _passwordController.text,
     );
 
@@ -45,6 +45,26 @@ class _LoginScreenState extends State<LoginScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(authProvider.error ?? 'Login failed'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _loginWithGoogle() async {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final success = await authProvider.loginWithGoogle();
+
+    if (!mounted) return;
+
+    if (success) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (context) => const HomeScreen()),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(authProvider.error ?? 'Google login failed'),
           backgroundColor: Colors.red,
         ),
       );
@@ -66,15 +86,13 @@ class _LoginScreenState extends State<LoginScreen> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // App Logo
                       Icon(
                         Icons.chat_bubble,
                         size: 100,
                         color: Theme.of(context).colorScheme.primary,
                       ),
                       const SizedBox(height: 16),
-                      
-                      // App Name
+
                       Text(
                         'ChatHeist',
                         textAlign: TextAlign.center,
@@ -86,7 +104,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Login to continue',
+                        'Login with Firebase Authentication',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 16,
@@ -102,32 +120,31 @@ class _LoginScreenState extends State<LoginScreen> {
                           color: Colors.grey[500],
                         ),
                       ),
-                      const SizedBox(height: 48),
-                      
-                      // Username Field
+                      const SizedBox(height: 40),
+
                       TextFormField(
-                        controller: _usernameController,
+                        controller: _emailController,
                         decoration: InputDecoration(
-                          labelText: 'Username',
-                          prefixIcon: const Icon(Icons.person),
+                          labelText: 'Email',
+                          prefixIcon: const Icon(Icons.email),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
                         ),
+                        keyboardType: TextInputType.emailAddress,
                         textInputAction: TextInputAction.next,
                         validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Please enter username';
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter email';
                           }
-                          if (value.length < 3) {
-                            return 'Username must be at least 3 characters';
+                          if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(value.trim())) {
+                            return 'Please enter a valid email';
                           }
                           return null;
                         },
                       ),
                       const SizedBox(height: 16),
-                      
-                      // Password Field
+
                       TextFormField(
                         controller: _passwordController,
                         obscureText: _obscurePassword,
@@ -136,8 +153,8 @@ class _LoginScreenState extends State<LoginScreen> {
                           prefixIcon: const Icon(Icons.lock),
                           suffixIcon: IconButton(
                             icon: Icon(
-                              _obscurePassword 
-                                  ? Icons.visibility 
+                              _obscurePassword
+                                  ? Icons.visibility
                                   : Icons.visibility_off,
                             ),
                             onPressed: () {
@@ -163,8 +180,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         },
                       ),
                       const SizedBox(height: 24),
-                      
-                      // Login Button
+
                       ElevatedButton(
                         onPressed: authProvider.isLoading ? null : _login,
                         style: ElevatedButton.styleFrom(
@@ -192,9 +208,21 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                               ),
                       ),
+                      const SizedBox(height: 12),
+
+                      OutlinedButton.icon(
+                        onPressed: authProvider.isLoading ? null : _loginWithGoogle,
+                        icon: const Icon(Icons.login),
+                        label: const Text('Continue with Google'),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
                       const SizedBox(height: 16),
-                      
-                      // Sign Up Link
+
                       TextButton(
                         onPressed: authProvider.isLoading
                             ? null
@@ -221,5 +249,3 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 }
-
-
