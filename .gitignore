@@ -1,0 +1,31 @@
+# Node
+node_modules/
+npm-debug.log
+.env
+
+# Flutter
+build/
+.dart_tool/
+.packages
+.pub-cache/
+.flutter-plugins
+.flutter-plugins-dependencies
+.gradle/
+android/.gradle/
+ios/Pods/
+
+# Gradle cache
+.gradle_user_home/
+**/.gradle/
+
+# Logs
+*.log
+backend/tmp_server_out.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
