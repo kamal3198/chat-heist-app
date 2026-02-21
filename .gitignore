@@ -32,3 +32,6 @@ Thumbs.db
 
 .env
 config/serviceAccountKey.json
+# Firebase service accounts
+backend/config/*firebase-adminsdk*.json
+backend/config/serviceAccountKey.json
