@@ -31,7 +31,7 @@ if [ ! -f ".env" ]; then
 fi
 
 echo "Starting server..."
-echo "Backend URL: http://localhost:3000"
+echo "Backend URL: configured via PORT / deployment environment"
 echo ""
 
 npm start

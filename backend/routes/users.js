@@ -22,6 +22,8 @@ router.get('/search', authMiddleware, async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
     const normalized = username.toLowerCase();
+    const includeSelf = String(req.query.includeSelf || '').toLowerCase() === 'true' ||
+      String(req.query.includeSelf || '') === '1';
 
     if (!normalized || normalized.length < 2) {
       return res.json({ users: [] });
@@ -29,7 +31,7 @@ router.get('/search', authMiddleware, async (req, res) => {
 
     console.log('[users/search] uid:', currentUserId, 'normalized query:', normalized);
 
-    const users = await searchUsers(normalized, currentUserId, 20);
+    const users = await searchUsers(normalized, includeSelf ? null : currentUserId, 20);
 
     let sent = [];
     let received = [];
@@ -71,6 +73,19 @@ router.get('/search', authMiddleware, async (req, res) => {
 
     const usersWithStatus = users.map((user) => {
       const userId = String(user._id);
+      if (includeSelf && userId === currentUserId) {
+        return {
+          _id: userId,
+          id: userId,
+          uid: userId,
+          username: user.username || '',
+          displayName: user.displayName || user.username || '',
+          avatar: user.avatar || '',
+          photoUrl: user.avatar || '',
+          requestStatus: 'self',
+          requestId: null,
+        };
+      }
 
       if (blockedIds.has(userId)) {
         return {

@@ -17,11 +17,15 @@ class GroupsScreen extends StatefulWidget {
 }
 
 class _GroupsScreenState extends State<GroupsScreen> {
+  bool _initialized = false;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      Provider.of<GroupProvider>(context, listen: false).loadGroups();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _initialized) return;
+      _initialized = true;
+      await Provider.of<GroupProvider>(context, listen: false).loadGroups();
     });
   }
 

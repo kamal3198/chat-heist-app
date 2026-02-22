@@ -19,10 +19,16 @@ class ContactsScreen extends StatefulWidget {
 }
 
 class _ContactsScreenState extends State<ContactsScreen> {
+  bool _initialized = false;
+
   @override
   void initState() {
     super.initState();
-    _loadContacts();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _initialized) return;
+      _initialized = true;
+      await _loadContacts();
+    });
   }
 
   Future<void> _loadContacts() async {

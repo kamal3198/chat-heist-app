@@ -216,7 +216,14 @@ class ContactProvider with ChangeNotifier {
   Future<List<Map<String, dynamic>>> searchUsers(String username) async {
     final normalized = username.trim();
     if (normalized.length < 2) return [];
-    return await _contactService.searchUsers(normalized);
+    try {
+      _error = null;
+      return await _contactService.searchUsers(normalized);
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return [];
+    }
   }
 
   // Update contact online status

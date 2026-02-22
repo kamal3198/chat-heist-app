@@ -16,10 +16,16 @@ class ChatListScreen extends StatefulWidget {
 }
 
 class _ChatListScreenState extends State<ChatListScreen> {
+  bool _initialized = false;
+
   @override
   void initState() {
     super.initState();
-    _loadData();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _initialized) return;
+      _initialized = true;
+      await _loadData();
+    });
   }
 
   Future<void> _loadData() async {

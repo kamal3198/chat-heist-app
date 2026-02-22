@@ -16,10 +16,11 @@ class ContactService extends ApiService {
         final List contacts = data['contacts'] ?? [];
         return contacts.map((json) => User.fromJson(json)).toList();
       }
-      return [];
+      final data = parseResponse(response);
+      throw Exception(data['error']?.toString() ?? 'Failed to load contacts (${response.statusCode})');
     } catch (e) {
       print('Get contacts error: $e');
-      return [];
+      rethrow;
     }
   }
 
@@ -62,10 +63,11 @@ class ContactService extends ApiService {
         final List requests = data['requests'] ?? [];
         return requests.map((json) => ContactRequest.fromJson(json)).toList();
       }
-      return [];
+      final data = parseResponse(response);
+      throw Exception(data['error']?.toString() ?? 'Failed to load pending requests (${response.statusCode})');
     } catch (e) {
       print('Get pending requests error: $e');
-      return [];
+      rethrow;
     }
   }
 
@@ -79,10 +81,11 @@ class ContactService extends ApiService {
         final List requests = data['requests'] ?? [];
         return requests.map((json) => ContactRequest.fromJson(json)).toList();
       }
-      return [];
+      final data = parseResponse(response);
+      throw Exception(data['error']?.toString() ?? 'Failed to load sent requests (${response.statusCode})');
     } catch (e) {
       print('Get sent requests error: $e');
-      return [];
+      rethrow;
     }
   }
 
@@ -187,7 +190,7 @@ class ContactService extends ApiService {
 
       final encodedUsername = Uri.encodeQueryComponent(normalized);
       final response = await get(
-        '${ApiConfig.baseUrl}${ApiConfig.searchUsers}?username=$encodedUsername',
+        '${ApiConfig.baseUrl}${ApiConfig.searchUsers}?username=$encodedUsername&includeSelf=true',
       );
       print('Search users HTTP status: ${response.statusCode}');
       print('Search users HTTP body: ${response.body}');
@@ -200,11 +203,12 @@ class ContactService extends ApiService {
         return users.cast<Map<String, dynamic>>();
       }
       final data = parseResponse(response);
-      print('Search users failed (${response.statusCode}): ${data['error'] ?? response.body}');
-      return [];
+      final errorMessage = data['error']?.toString() ?? 'Search failed (${response.statusCode})';
+      print('Search users failed (${response.statusCode}): $errorMessage');
+      throw Exception(errorMessage);
     } catch (e) {
       print('Search users error: $e');
-      return [];
+      rethrow;
     }
   }
 }

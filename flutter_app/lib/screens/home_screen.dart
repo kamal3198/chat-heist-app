@@ -1,20 +1,22 @@
-﻿import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'dart:io';
+
+import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
+
+import '../config/api_config.dart';
 import '../models/user.dart';
 import '../providers/auth_provider.dart';
 import '../providers/call_provider.dart';
 import '../providers/contact_provider.dart';
 import '../providers/group_provider.dart';
 import '../providers/message_provider.dart';
-import '../config/api_config.dart';
-import 'channels_screen.dart';
 import 'call_history_screen.dart';
-import 'login_screen.dart';
+import 'channels_screen.dart';
 import 'chat_list_screen.dart';
 import 'contacts_screen.dart';
 import 'groups_screen.dart';
+import 'login_screen.dart';
 import 'requests_screen.dart';
 import 'settings_screen.dart';
 import 'status_screen.dart';
@@ -33,13 +35,22 @@ class _ProfileTabState extends State<ProfileTab> {
   final _formKey = GlobalKey<FormState>();
   final _picker = ImagePicker();
   File? _selectedAvatarFile;
+  bool _initialized = false;
 
   @override
   void initState() {
     super.initState();
-    final user = Provider.of<AuthProvider>(context, listen: false).currentUser;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _hydrateProfileFields();
+    });
+  }
+
+  void _hydrateProfileFields() {
+    if (!mounted || _initialized) return;
+    final user = context.read<AuthProvider>().currentUser;
     _usernameController.text = user?.username ?? '';
     _aboutController.text = user?.about ?? '';
+    _initialized = true;
   }
 
   @override
@@ -51,7 +62,7 @@ class _ProfileTabState extends State<ProfileTab> {
 
   Future<void> _pickAvatar() async {
     final image = await _picker.pickImage(source: ImageSource.gallery);
-    if (image == null) return;
+    if (image == null || !mounted) return;
     setState(() {
       _selectedAvatarFile = File(image.path);
     });
@@ -60,7 +71,7 @@ class _ProfileTabState extends State<ProfileTab> {
   Future<void> _saveProfile() async {
     if (!_formKey.currentState!.validate()) return;
 
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final authProvider = context.read<AuthProvider>();
     final success = await authProvider.updateProfile(
       username: _usernameController.text.trim(),
       about: _aboutController.text.trim(),
@@ -75,7 +86,7 @@ class _ProfileTabState extends State<ProfileTab> {
       ),
     );
 
-    if (success) {
+    if (success && mounted) {
       setState(() {
         _selectedAvatarFile = null;
       });
@@ -84,7 +95,7 @@ class _ProfileTabState extends State<ProfileTab> {
 
   @override
   Widget build(BuildContext context) {
-    final authProvider = Provider.of<AuthProvider>(context);
+    final authProvider = context.watch<AuthProvider>();
     final user = authProvider.currentUser;
 
     return SingleChildScrollView(
@@ -193,12 +204,11 @@ class _ProfileTabState extends State<ProfileTab> {
               child: OutlinedButton.icon(
                 onPressed: () async {
                   await authProvider.logout();
-                  if (context.mounted) {
-                    Navigator.of(context).pushAndRemoveUntil(
-                      MaterialPageRoute(builder: (context) => const LoginScreen()),
-                      (route) => false,
-                    );
-                  }
+                  if (!context.mounted) return;
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (context) => const LoginScreen()),
+                    (route) => false,
+                  );
                 },
                 icon: const Icon(Icons.logout),
                 label: const Text('Logout'),
@@ -234,79 +244,95 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initializeProviders();
+      _initializeProvidersOnce();
     });
   }
 
-  Future<void> _initializeProviders() async {
+  Future<void> _initializeProvidersOnce() async {
     if (!mounted || _providersInitialized) return;
     _providersInitialized = true;
 
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final contactProvider = Provider.of<ContactProvider>(context, listen: false);
-    final groupProvider = Provider.of<GroupProvider>(context, listen: false);
-    final callProvider = Provider.of<CallProvider>(context, listen: false);
-    final messageProvider = Provider.of<MessageProvider>(context, listen: false);
+    final authProvider = context.read<AuthProvider>();
+    final contactProvider = context.read<ContactProvider>();
+    final groupProvider = context.read<GroupProvider>();
+    final callProvider = context.read<CallProvider>();
+    final messageProvider = context.read<MessageProvider>();
 
-    if (authProvider.currentUser != null) {
-      final userId = authProvider.currentUser!.id;
-      await contactProvider.initialize(userId);
+    final currentUser = authProvider.currentUser;
+    if (currentUser == null) return;
+
+    final userId = currentUser.id;
+    await contactProvider.initialize(userId);
+    if (!mounted) return;
+    await groupProvider.loadGroups();
+    if (!mounted) return;
+    callProvider.initialize(userId);
+    messageProvider.initialize(userId);
+  }
+
+  void _handleIncomingCallDialog() {
+    final callProvider = context.read<CallProvider>();
+    final incomingCall = callProvider.incomingCall;
+    if (incomingCall == null) return;
+    if (incomingCall.callId == _lastIncomingCallId) return;
+
+    _lastIncomingCallId = incomingCall.callId;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      await groupProvider.loadGroups();
-      if (!mounted) return;
-      callProvider.initialize(userId);
-      messageProvider.initialize(userId);
-    }
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(incomingCall.isGroup ? 'Incoming Group Call' : 'Incoming Call'),
+          content: const Text('Accept voice call?'),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await callProvider.rejectIncomingCall();
+                if (context.mounted) Navigator.pop(context);
+              },
+              child: const Text('Reject'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final accepted = await callProvider.acceptIncomingCall(context);
+                if (!accepted || !context.mounted) return;
+                Navigator.pop(context);
+                final participants = incomingCall.participantIds
+                    .map(
+                      (id) => User(
+                        id: id,
+                        username: id == incomingCall.callerId ? 'Caller' : 'Participant',
+                        avatar: '',
+                        createdAt: DateTime.now(),
+                      ),
+                    )
+                    .toList();
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => VoiceCallScreen(
+                      title: incomingCall.isGroup ? 'Group Call' : 'Voice Call',
+                      isGroup: incomingCall.isGroup,
+                      participants: participants,
+                      onEndCall: () => callProvider.endCall(),
+                    ),
+                  ),
+                );
+              },
+              child: const Text('Accept'),
+            ),
+          ],
+        ),
+      );
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final callProvider = Provider.of<CallProvider>(context);
-    final incomingCall = callProvider.incomingCall;
-
-    if (incomingCall != null && incomingCall.callId != _lastIncomingCallId) {
-      _lastIncomingCallId = incomingCall.callId;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: Text(incomingCall.isGroup ? 'Incoming Group Call' : 'Incoming Call'),
-            content: const Text('Accept voice call?'),
-            actions: [
-              TextButton(
-                onPressed: () async {
-                  await callProvider.rejectIncomingCall();
-                  Navigator.pop(context);
-                },
-                child: const Text('Reject'),
-              ),
-              ElevatedButton(
-                onPressed: () async {
-                  final accepted = await callProvider.acceptIncomingCall(context);
-                  if (!accepted) return;
-                  Navigator.pop(context);
-                  final participants = incomingCall.participantIds
-                      .map((id) => User(id: id, username: id == incomingCall.callerId ? 'Caller' : 'Participant', avatar: '', createdAt: DateTime.now()))
-                      .toList();
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => VoiceCallScreen(
-                        title: incomingCall.isGroup ? 'Group Call' : 'Voice Call',
-                        isGroup: incomingCall.isGroup,
-                        participants: participants,
-                        onEndCall: () => callProvider.endCall(),
-                      ),
-                    ),
-                  );
-                },
-                child: const Text('Accept'),
-              ),
-            ],
-          ),
-        );
-      });
+    final incomingCall = context.watch<CallProvider>().incomingCall;
+    if (incomingCall != null) {
+      _handleIncomingCallDialog();
     }
 
     return Scaffold(
@@ -340,13 +366,12 @@ class _HomeScreenState extends State<HomeScreen> {
               if (value == 'settings') {
                 Navigator.push(context, MaterialPageRoute(builder: (context) => const SettingsScreen()));
               } else if (value == 'logout') {
-                await Provider.of<AuthProvider>(context, listen: false).logout();
-                if (context.mounted) {
-                  Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(builder: (context) => const LoginScreen()),
-                    (route) => false,
-                  );
-                }
+                await context.read<AuthProvider>().logout();
+                if (!context.mounted) return;
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (context) => const LoginScreen()),
+                  (route) => false,
+                );
               }
             },
             itemBuilder: (context) => const [
@@ -361,6 +386,7 @@ class _HomeScreenState extends State<HomeScreen> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (index) {
+          if (!mounted) return;
           setState(() {
             _selectedIndex = index;
           });
@@ -372,9 +398,6 @@ class _HomeScreenState extends State<HomeScreen> {
           NavigationDestination(icon: Icon(Icons.person_outlined), selectedIcon: Icon(Icons.person), label: 'Profile'),
         ],
       ),
-      floatingActionButton: null,
     );
   }
 }
-
-

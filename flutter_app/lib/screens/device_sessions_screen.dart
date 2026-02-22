@@ -22,10 +22,14 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _load();
+    });
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
     setState(() {
       _loading = true;
       _error = null;
@@ -33,14 +37,18 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
 
     try {
       final (sessions, currentSessionId) = await _service.listSessions();
+      if (!mounted) return;
       setState(() {
         _sessions = sessions;
         _currentSessionId = currentSessionId;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _error = e.toString());
     } finally {
-      setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
 

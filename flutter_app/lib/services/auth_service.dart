@@ -13,7 +13,6 @@ import '../models/user.dart';
 
 class AuthService {
   static const _storage = FlutterSecureStorage();
-  static const _tokenKey = 'auth_token';
   static const _userKey = 'current_user';
   static const _deviceSessionIdKey = 'device_session_id';
   static const _deviceIdKey = 'device_id';
@@ -62,9 +61,6 @@ class AuthService {
   }
 
   Future<void> _persistSession(Map<String, dynamic> data) async {
-    if (data['token'] != null) {
-      await _storage.write(key: _tokenKey, value: data['token'].toString());
-    }
     if (data['user'] != null) {
       await _storage.write(key: _userKey, value: jsonEncode(data['user']));
     }
@@ -155,7 +151,7 @@ class AuthService {
         email: email.trim(),
         password: password,
       );
-      final idToken = await credential.user?.getIdToken();
+      final idToken = await credential.user?.getIdToken(true);
       if (idToken == null) {
         return {
           'success': false,
@@ -187,7 +183,7 @@ class AuthService {
         await credential.user!.updateDisplayName(normalizedUsername);
       }
 
-      final idToken = await credential.user?.getIdToken();
+      final idToken = await credential.user?.getIdToken(true);
       if (idToken == null) {
         return {
           'success': false,
@@ -225,7 +221,7 @@ class AuthService {
       );
 
       final userCredential = await _firebaseAuth.signInWithCredential(credential);
-      final idToken = await userCredential.user?.getIdToken();
+      final idToken = await userCredential.user?.getIdToken(true);
 
       if (idToken == null) {
         return {
@@ -287,16 +283,10 @@ class AuthService {
   Future<String?> getToken() async {
     try {
       final currentUser = _firebaseAuth.currentUser;
-      if (currentUser != null) {
-        final token = await currentUser.getIdToken();
-        if (token != null) {
-          await _storage.write(key: _tokenKey, value: token);
-          return token;
-        }
-      }
-      return await _storage.read(key: _tokenKey);
+      if (currentUser == null) return null;
+      return await currentUser.getIdToken(true);
     } catch (_) {
-      return await _storage.read(key: _tokenKey);
+      return null;
     }
   }
 
@@ -325,7 +315,6 @@ class AuthService {
   Future<void> logout() async {
     await _googleSignIn.signOut();
     await _firebaseAuth.signOut();
-    await _storage.delete(key: _tokenKey);
     await _storage.delete(key: _userKey);
     await _storage.delete(key: _deviceSessionIdKey);
   }

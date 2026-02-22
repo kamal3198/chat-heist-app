@@ -12,11 +12,15 @@ class CallHistoryScreen extends StatefulWidget {
 }
 
 class _CallHistoryScreenState extends State<CallHistoryScreen> {
+  bool _initialized = false;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<CallProvider>().loadCallHistory();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _initialized) return;
+      _initialized = true;
+      await context.read<CallProvider>().loadCallHistory();
     });
   }
 

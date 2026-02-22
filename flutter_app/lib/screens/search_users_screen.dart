@@ -15,6 +15,7 @@ class _SearchUsersScreenState extends State<SearchUsersScreen> {
   final TextEditingController _searchController = TextEditingController();
   List<Map<String, dynamic>> _searchResults = [];
   bool _isSearching = false;
+  String? _searchError;
 
   @override
   void dispose() {
@@ -26,20 +27,24 @@ class _SearchUsersScreenState extends State<SearchUsersScreen> {
     if (query.length < 2) {
       setState(() {
         _searchResults = [];
+        _searchError = null;
       });
       return;
     }
 
     setState(() {
       _isSearching = true;
+      _searchError = null;
     });
 
     final contactProvider = Provider.of<ContactProvider>(context, listen: false);
     final results = await contactProvider.searchUsers(query);
+    if (!mounted) return;
 
     setState(() {
       _searchResults = results;
       _isSearching = false;
+      _searchError = contactProvider.error;
     });
   }
 
@@ -83,6 +88,8 @@ class _SearchUsersScreenState extends State<SearchUsersScreen> {
 
   String _getButtonText(String requestStatus) {
     switch (requestStatus) {
+      case 'self':
+        return 'You';
       case 'none':
         return 'Add Contact';
       case 'sent':
@@ -100,6 +107,8 @@ class _SearchUsersScreenState extends State<SearchUsersScreen> {
 
   Color? _getButtonColor(BuildContext context, String requestStatus) {
     switch (requestStatus) {
+      case 'self':
+        return Colors.blueGrey;
       case 'sent':
         return Colors.grey;
       case 'received':
@@ -140,6 +149,7 @@ class _SearchUsersScreenState extends State<SearchUsersScreen> {
                           _searchController.clear();
                           setState(() {
                             _searchResults = [];
+                            _searchError = null;
                           });
                         },
                       )
@@ -153,11 +163,43 @@ class _SearchUsersScreenState extends State<SearchUsersScreen> {
               },
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Hint: Your own account appears as "You" and cannot be added as a contact.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
 
           // Search results
           Expanded(
             child: _isSearching
                 ? const Center(child: CircularProgressIndicator())
+                : _searchError != null
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.error_outline, color: Colors.red, size: 56),
+                              const SizedBox(height: 12),
+                              Text(
+                                _searchError!,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: Colors.red),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
                 : _searchResults.isEmpty
                     ? Center(
                         child: Column(
@@ -198,6 +240,9 @@ class _SearchUsersScreenState extends State<SearchUsersScreen> {
                           final user = User.fromJson(userData);
                           final requestStatus = userData['requestStatus'] as String? ?? 'none';
                           final requestId = userData['requestId'] as String?;
+                          final subtitle = requestStatus == 'self'
+                              ? 'This is your account'
+                              : (user.isOnline ? 'Online' : 'Offline');
 
                           return ListTile(
                             leading: UserAvatar(
@@ -207,11 +252,11 @@ class _SearchUsersScreenState extends State<SearchUsersScreen> {
                             ),
                             title: Text(user.username),
                             subtitle: Text(
-                              user.isOnline ? 'Online' : 'Offline',
+                              subtitle,
                               style: TextStyle(
-                                color: user.isOnline
-                                    ? Colors.green
-                                    : Colors.grey,
+                                color: requestStatus == 'self'
+                                    ? Colors.blueGrey
+                                    : (user.isOnline ? Colors.green : Colors.grey),
                                 fontSize: 12,
                               ),
                             ),

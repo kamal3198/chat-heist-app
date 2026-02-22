@@ -44,6 +44,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _showStickerPicker = false;
   final Set<String> _selectedMessageIds = {};
   final List<String> _customStickers = [];
+  bool _initialized = false;
 
   final List<String> _emojis = const [
     '\u{1F970}', '\u{1F60D}', '\u{1F60A}', '\u{1F618}', '\u{1F496}', '\u{1F49E}',
@@ -68,7 +69,11 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    _loadMessages();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _initialized) return;
+      _initialized = true;
+      _loadMessages();
+    });
     _messageController.addListener(_onTextChanged);
   }
 
@@ -91,11 +96,13 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onTextChanged() {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final messageProvider = Provider.of<MessageProvider>(context, listen: false);
+    final currentUser = authProvider.currentUser;
+    if (currentUser == null) return;
 
     if (_messageController.text.isNotEmpty && !_isTyping) {
       _isTyping = true;
       messageProvider.sendTyping(
-        authProvider.currentUser!.id,
+        currentUser.id,
         widget.contact.id,
         true,
       );
@@ -106,7 +113,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (_isTyping) {
         _isTyping = false;
         messageProvider.sendTyping(
-          authProvider.currentUser!.id,
+          currentUser.id,
           widget.contact.id,
           false,
         );
@@ -120,9 +127,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final messageProvider = Provider.of<MessageProvider>(context, listen: false);
+    final currentUser = authProvider.currentUser;
+    if (currentUser == null) return;
 
     messageProvider.sendMessage(
-      senderId: authProvider.currentUser!.id,
+      senderId: currentUser.id,
       receiverId: widget.contact.id,
       text: text,
     );
@@ -134,9 +143,11 @@ class _ChatScreenState extends State<ChatScreen> {
   void _sendSticker(String sticker) {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final messageProvider = Provider.of<MessageProvider>(context, listen: false);
+    final currentUser = authProvider.currentUser;
+    if (currentUser == null) return;
 
     messageProvider.sendMessage(
-      senderId: authProvider.currentUser!.id,
+      senderId: currentUser.id,
       receiverId: widget.contact.id,
       text: sticker,
     );
@@ -272,10 +283,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       final messageProvider = Provider.of<MessageProvider>(context, listen: false);
+      final currentUser = authProvider.currentUser;
+      if (currentUser == null) return;
       final bytes = await image.readAsBytes();
 
       await messageProvider.sendFileBytesMessage(
-        senderId: authProvider.currentUser!.id,
+        senderId: currentUser.id,
         receiverId: widget.contact.id,
         bytes: bytes,
         fileName: image.name,
@@ -300,10 +313,12 @@ class _ChatScreenState extends State<ChatScreen> {
       final picked = result.files.first;
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       final messageProvider = Provider.of<MessageProvider>(context, listen: false);
+      final currentUser = authProvider.currentUser;
+      if (currentUser == null) return;
 
       if (picked.bytes != null) {
         await messageProvider.sendFileBytesMessage(
-          senderId: authProvider.currentUser!.id,
+          senderId: currentUser.id,
           receiverId: widget.contact.id,
           bytes: picked.bytes!,
           fileName: picked.name,
@@ -311,7 +326,7 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       } else if (picked.path != null) {
         await messageProvider.sendFileMessage(
-          senderId: authProvider.currentUser!.id,
+          senderId: currentUser.id,
           receiverId: widget.contact.id,
           file: File(picked.path!),
         );
@@ -562,7 +577,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
-    final currentUserId = authProvider.currentUser!.id;
+    final currentUserId = authProvider.currentUser?.id ?? '';
 
     return Scaffold(
       appBar: AppBar(

@@ -22,30 +22,40 @@ class _AISettingsScreenState extends State<AISettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _load();
+    });
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
       final data = await _service.getSettings();
+      if (!mounted) return;
       _customReplyController.text = data.customReply;
       setState(() => _settings = data);
     } catch (e) {
+      if (!mounted) return;
       setState(() => _error = e.toString());
     } finally {
-      setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
 
   Future<void> _save() async {
+    if (!mounted) return;
     setState(() => _saving = true);
     try {
       final updated = _settings.copyWith(customReply: _customReplyController.text.trim());
       final result = await _service.updateSettings(updated);
+      if (!mounted) return;
       setState(() => _settings = result);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('AI settings updated')));
@@ -55,7 +65,9 @@ class _AISettingsScreenState extends State<AISettingsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
       }
     } finally {
-      setState(() => _saving = false);
+      if (mounted) {
+        setState(() => _saving = false);
+      }
     }
   }
 

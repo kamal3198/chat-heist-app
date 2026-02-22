@@ -14,12 +14,17 @@ class RequestsScreen extends StatefulWidget {
 class _RequestsScreenState extends State<RequestsScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  bool _initialized = false;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _loadRequests();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _initialized) return;
+      _initialized = true;
+      await _loadRequests();
+    });
   }
 
   @override

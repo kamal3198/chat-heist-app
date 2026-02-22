@@ -25,12 +25,6 @@ function isAllowedOrigin(origin) {
   if (env.corsOrigins.includes('*')) return true;
   if (!origin) return true;
   if (env.corsOrigins.includes(origin)) return true;
-  if (
-    env.nodeEnv !== 'production' &&
-    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)
-  ) {
-    return true;
-  }
   return false;
 }
 
