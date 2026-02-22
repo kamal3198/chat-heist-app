@@ -16,10 +16,10 @@ const {
 
 router.get('/search', auth, async (req, res) => {
   try {
-    const { username } = req.query;
+    const username = String(req.query.username || '').trim();
     const currentUserId = req.userId;
 
-    if (!username || String(username).length < 2) {
+    if (!username || username.length < 2) {
       return res.json({ users: [] });
     }
 
@@ -71,6 +71,7 @@ router.get('/search', auth, async (req, res) => {
 
     return res.json({ users: usersWithStatus });
   } catch (error) {
+    console.error('User search error:', error);
     return res.status(500).json({ error: 'Server error' });
   }
 });

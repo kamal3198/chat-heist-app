@@ -201,18 +201,37 @@ async function updateUser(userId, patch) {
 }
 
 async function searchUsers(prefix, excludeUserId, limit = 20) {
-  const { start, end } = usernamePrefixRange(prefix);
+  const normalizedPrefix = String(prefix || '').trim().toLowerCase();
+  const { start, end } = usernamePrefixRange(normalizedPrefix);
   if (!start || start.length < 2) return [];
 
-  const snap = await db.collection(COLLECTIONS.users)
-    .where('usernameLower', '>=', start)
-    .where('usernameLower', '<=', end)
-    .limit(limit)
-    .get();
+  // Primary query uses normalized field. Fallback query supports older records
+  // that may not yet have usernameLower populated.
+  const [lowerSnap, legacySnap] = await Promise.all([
+    db.collection(COLLECTIONS.users)
+      .where('usernameLower', '>=', start)
+      .where('usernameLower', '<=', end)
+      .limit(limit)
+      .get(),
+    db.collection(COLLECTIONS.users)
+      .where('username', '>=', start)
+      .where('username', '<=', end)
+      .limit(limit)
+      .get(),
+  ]);
 
-  return snap.docs
-    .map((docSnap) => withIds(docSnap.id, docSnap.data()))
+  const seen = new Set();
+  const merged = [];
+  for (const docSnap of [...lowerSnap.docs, ...legacySnap.docs]) {
+    if (seen.has(docSnap.id)) continue;
+    seen.add(docSnap.id);
+    merged.push(withIds(docSnap.id, docSnap.data()));
+  }
+
+  return merged
     .filter((user) => user._id !== String(excludeUserId))
+    .filter((user) => String(user.username || '').toLowerCase().startsWith(normalizedPrefix))
+    .slice(0, limit)
     .map(sanitizeUser);
 }
 
