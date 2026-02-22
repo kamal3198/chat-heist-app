@@ -2,8 +2,10 @@ import '../config/api_config.dart';
 import '../models/user.dart';
 import '../models/contact_request.dart';
 import 'api_service.dart';
+import 'auth_service.dart';
 
 class ContactService extends ApiService {
+  final AuthService _authService = AuthService();
   // Get accepted contacts
   Future<List<User>> getContacts() async {
     try {
@@ -177,10 +179,18 @@ class ContactService extends ApiService {
         return [];
       }
 
+      final token = await _authService.getToken();
+      final tokenPreview = token == null
+          ? 'null'
+          : '${token.substring(0, token.length > 20 ? 20 : token.length)}...';
+      print('Search users auth token preview: $tokenPreview');
+
       final encodedUsername = Uri.encodeQueryComponent(normalized);
       final response = await get(
         '${ApiConfig.baseUrl}${ApiConfig.searchUsers}?username=$encodedUsername',
       );
+      print('Search users HTTP status: ${response.statusCode}');
+      print('Search users HTTP body: ${response.body}');
       
       if (isSuccess(response)) {
         final data = parseResponse(response);

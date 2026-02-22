@@ -221,6 +221,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
   String? _lastIncomingCallId;
+  bool _providersInitialized = false;
 
   final List<Widget> _tabs = const [
     ChatListScreen(),
@@ -232,10 +233,15 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _initializeProviders();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeProviders();
+    });
   }
 
-  void _initializeProviders() {
+  Future<void> _initializeProviders() async {
+    if (!mounted || _providersInitialized) return;
+    _providersInitialized = true;
+
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final contactProvider = Provider.of<ContactProvider>(context, listen: false);
     final groupProvider = Provider.of<GroupProvider>(context, listen: false);
@@ -243,10 +249,13 @@ class _HomeScreenState extends State<HomeScreen> {
     final messageProvider = Provider.of<MessageProvider>(context, listen: false);
 
     if (authProvider.currentUser != null) {
-      contactProvider.initialize(authProvider.currentUser!.id);
-      groupProvider.loadGroups();
-      callProvider.initialize(authProvider.currentUser!.id);
-      messageProvider.initialize(authProvider.currentUser!.id);
+      final userId = authProvider.currentUser!.id;
+      await contactProvider.initialize(userId);
+      if (!mounted) return;
+      await groupProvider.loadGroups();
+      if (!mounted) return;
+      callProvider.initialize(userId);
+      messageProvider.initialize(userId);
     }
   }
 

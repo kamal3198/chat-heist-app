@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/user.dart';
 import '../models/contact_request.dart';
@@ -16,6 +17,10 @@ class ContactProvider with ChangeNotifier {
   List<User> _blockedUsers = [];
   bool _isLoading = false;
   String? _error;
+  bool _initialized = false;
+  bool _initializing = false;
+  String? _initializedUserId;
+  bool _socketListenersBound = false;
 
   List<User> get contacts => _contacts;
   List<ContactRequest> get pendingRequests => _pendingRequests;
@@ -23,14 +28,33 @@ class ContactProvider with ChangeNotifier {
   List<User> get blockedUsers => _blockedUsers;
   bool get isLoading => _isLoading;
   String? get error => _error;
+  bool get initialized => _initialized;
 
   // Initialize and load contacts
   Future<void> initialize(String userId) async {
-    await loadContacts();
-    await loadPendingRequests();
-    await loadSentRequests();
-    await loadBlockedUsers();
-    _setupSocketListeners();
+    if (_initializing) return;
+    if (_initialized && _initializedUserId == userId) return;
+
+    _initializing = true;
+    _setLoading(true, notify: true);
+
+    try {
+      await loadContacts(notify: false);
+      await loadPendingRequests(notify: false);
+      await loadSentRequests(notify: false);
+      await loadBlockedUsers(notify: false);
+
+      if (!_socketListenersBound) {
+        _setupSocketListeners();
+        _socketListenersBound = true;
+      }
+
+      _initialized = true;
+      _initializedUserId = userId;
+    } finally {
+      _initializing = false;
+      _setLoading(false, notify: true);
+    }
   }
 
   // Setup socket listeners
@@ -46,63 +70,62 @@ class ContactProvider with ChangeNotifier {
       // Remove from sent requests
       _sentRequests.removeWhere((r) => r.id == request.id);
       // Add to contacts
-      loadContacts();
+      unawaited(loadContacts());
       notifyListeners();
     });
 
     _socketService.onUserBlocked((blockerId) {
       // Remove from contacts if blocked by someone
-      loadContacts();
+      unawaited(loadContacts());
       notifyListeners();
     });
   }
 
   // Load accepted contacts
-  Future<void> loadContacts() async {
-    _isLoading = true;
+  Future<void> loadContacts({bool notify = true}) async {
+    _setLoading(true, notify: notify);
     _error = null;
-    notifyListeners();
 
     try {
       _contacts = await _contactService.getContacts();
     } catch (e) {
       _error = e.toString();
     } finally {
-      _isLoading = false;
-      notifyListeners();
+      _setLoading(false, notify: notify);
+      if (notify) notifyListeners();
     }
   }
 
   // Load pending requests (received)
-  Future<void> loadPendingRequests() async {
+  Future<void> loadPendingRequests({bool notify = true}) async {
     try {
       _pendingRequests = await _contactService.getPendingRequests();
-      notifyListeners();
+      if (notify) notifyListeners();
     } catch (e) {
       _error = e.toString();
-      notifyListeners();
+      if (notify) notifyListeners();
     }
   }
 
   // Load sent requests
-  Future<void> loadSentRequests() async {
+  Future<void> loadSentRequests({bool notify = true}) async {
     try {
       _sentRequests = await _contactService.getSentRequests();
-      notifyListeners();
+      if (notify) notifyListeners();
     } catch (e) {
       _error = e.toString();
-      notifyListeners();
+      if (notify) notifyListeners();
     }
   }
 
   // Load blocked users
-  Future<void> loadBlockedUsers() async {
+  Future<void> loadBlockedUsers({bool notify = true}) async {
     try {
       _blockedUsers = await _blockedUserService.getBlockedUsers();
-      notifyListeners();
+      if (notify) notifyListeners();
     } catch (e) {
       _error = e.toString();
-      notifyListeners();
+      if (notify) notifyListeners();
     }
   }
 
@@ -191,8 +214,9 @@ class ContactProvider with ChangeNotifier {
 
   // Search users
   Future<List<Map<String, dynamic>>> searchUsers(String username) async {
-    if (username.length < 2) return [];
-    return await _contactService.searchUsers(username);
+    final normalized = username.trim();
+    if (normalized.length < 2) return [];
+    return await _contactService.searchUsers(normalized);
   }
 
   // Update contact online status
@@ -214,7 +238,18 @@ class ContactProvider with ChangeNotifier {
   }
 
   // Cleanup
+  @override
   void dispose() {
+    _initialized = false;
+    _initializing = false;
+    _initializedUserId = null;
+    _socketListenersBound = false;
     super.dispose();
+  }
+
+  void _setLoading(bool value, {required bool notify}) {
+    if (_isLoading == value) return;
+    _isLoading = value;
+    if (notify) notifyListeners();
   }
 }

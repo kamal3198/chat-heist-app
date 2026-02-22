@@ -17,30 +17,56 @@ const {
 router.get('/search', authMiddleware, async (req, res) => {
   try {
     const username = String(req.query.username || '').trim();
-    const currentUserId = req.user?.uid || req.userId;
+    const currentUserId = String(req.user?.uid || req.userId || '');
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
     const normalized = username.toLowerCase();
 
     if (!normalized || normalized.length < 2) {
       return res.json({ users: [] });
     }
 
-    console.log('[users/search] normalized query:', normalized);
+    console.log('[users/search] uid:', currentUserId, 'normalized query:', normalized);
 
-    const [users, sent, received, blocked] = await Promise.all([
-      searchUsers(normalized, currentUserId, 20),
-      listRequestsBySender(currentUserId),
-      listRequestsByReceiver(currentUserId),
-      listBlocksInvolvingUser(currentUserId),
-    ]);
+    const users = await searchUsers(normalized, currentUserId, 20);
+
+    let sent = [];
+    let received = [];
+    let blocked = [];
+    try {
+      [sent, received, blocked] = await Promise.all([
+        listRequestsBySender(currentUserId),
+        listRequestsByReceiver(currentUserId),
+        listBlocksInvolvingUser(currentUserId),
+      ]);
+    } catch (dependencyError) {
+      console.error('[users/search] dependency query failed:', dependencyError?.message || dependencyError);
+      if (dependencyError?.stack) {
+        console.error(dependencyError.stack);
+      }
+      sent = [];
+      received = [];
+      blocked = [];
+    }
 
     const requestByOtherUser = new Map();
     [...sent, ...received].forEach((request) => {
-      const otherId = request.sender === currentUserId ? request.receiver : request.sender;
+      const sender = String(request?.sender || '');
+      const receiver = String(request?.receiver || '');
+      const otherId = sender === currentUserId ? receiver : sender;
+      if (!otherId) return;
       requestByOtherUser.set(otherId, request);
     });
 
     const blockedIds = new Set(
-      blocked.map((entry) => (entry.blocker === currentUserId ? entry.blocked : entry.blocker))
+      blocked
+        .map((entry) => {
+          const blocker = String(entry?.blocker || '');
+          const blockedUser = String(entry?.blocked || '');
+          return blocker === currentUserId ? blockedUser : blocker;
+        })
+        .filter(Boolean)
     );
 
     const usersWithStatus = users.map((user) => {
@@ -64,10 +90,10 @@ router.get('/search', authMiddleware, async (req, res) => {
       let status = 'none';
 
       if (request) {
-        if (request.status === 'accepted') {
+        if (request?.status === 'accepted') {
           status = 'accepted';
-        } else if (request.status === 'pending') {
-          status = request.sender === currentUserId ? 'sent' : 'received';
+        } else if (request?.status === 'pending') {
+          status = String(request.sender || '') === currentUserId ? 'sent' : 'received';
         }
       }
 
@@ -89,7 +115,10 @@ router.get('/search', authMiddleware, async (req, res) => {
 
     return res.json({ users: usersWithStatus });
   } catch (error) {
-    console.error('User search error:', error?.message || error);
+    console.error('[users/search] fatal error:', error?.message || error);
+    if (error?.stack) {
+      console.error(error.stack);
+    }
     return res.status(500).json({ error: 'Server error' });
   }
 });
