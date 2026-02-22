@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "583401891840",
+    "project_id": "chat-heist",
+    "storage_bucket": "chat-heist.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:583401891840:android:7e4bdda3b9c03e82f850e5",
+        "android_client_info": {
+          "package_name": "com.example.whatsapp_clone"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "583401891840-ank18q50bn1t684k7c0qab4f3ugucfgk.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBIBvIIXN9GqQ_Rgpm27VgnOl6UzUXSeFk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "583401891840-ank18q50bn1t684k7c0qab4f3ugucfgk.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

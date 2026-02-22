@@ -1,6 +1,7 @@
-import 'package:firebase_core/firebase_core.dart';
+﻿import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'firebase_options.dart';
 import 'providers/auth_provider.dart';
 import 'providers/call_provider.dart';
 import 'providers/chat_settings_provider.dart';
@@ -25,34 +26,9 @@ Future<void> main() async {
 }
 
 Future<void> _initializeFirebase() async {
-  try {
-    await Firebase.initializeApp();
-    return;
-  } catch (_) {
-    const apiKey = String.fromEnvironment('FIREBASE_API_KEY');
-    const appId = String.fromEnvironment('FIREBASE_APP_ID');
-    const messagingSenderId = String.fromEnvironment('FIREBASE_MESSAGING_SENDER_ID');
-    const projectId = String.fromEnvironment('FIREBASE_PROJECT_ID');
-    const storageBucket = String.fromEnvironment('FIREBASE_STORAGE_BUCKET');
-
-    if (apiKey.isEmpty || appId.isEmpty || messagingSenderId.isEmpty || projectId.isEmpty) {
-      throw Exception(
-        'Firebase is not configured. Run "flutterfire configure" or pass '
-        '--dart-define values for FIREBASE_API_KEY, FIREBASE_APP_ID, '
-        'FIREBASE_MESSAGING_SENDER_ID, FIREBASE_PROJECT_ID.',
-      );
-    }
-
-    await Firebase.initializeApp(
-      options: FirebaseOptions(
-        apiKey: apiKey,
-        appId: appId,
-        messagingSenderId: messagingSenderId,
-        projectId: projectId,
-        storageBucket: storageBucket.isEmpty ? null : storageBucket,
-      ),
-    );
-  }
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 }
 
 class MyApp extends StatelessWidget {
