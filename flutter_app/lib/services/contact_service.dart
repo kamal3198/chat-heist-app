@@ -171,8 +171,9 @@ class ContactService extends ApiService {
   // Search users
   Future<List<Map<String, dynamic>>> searchUsers(String username) async {
     try {
+      final encodedUsername = Uri.encodeQueryComponent(username.trim());
       final response = await get(
-        '${ApiConfig.baseUrl}${ApiConfig.searchUsers}?username=$username',
+        '${ApiConfig.baseUrl}${ApiConfig.searchUsers}?username=$encodedUsername',
       );
       
       if (isSuccess(response)) {
@@ -180,6 +181,8 @@ class ContactService extends ApiService {
         final List users = data['users'] ?? [];
         return users.cast<Map<String, dynamic>>();
       }
+      final data = parseResponse(response);
+      print('Search users failed (${response.statusCode}): ${data['error'] ?? response.body}');
       return [];
     } catch (e) {
       print('Search users error: $e');
