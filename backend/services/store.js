@@ -6,6 +6,8 @@ const FieldValue = admin.firestore.FieldValue;
 
 const COLLECTIONS = {
   users: 'users',
+  usernames: 'usernames',
+  reservedUsernames: 'reserved_usernames',
   contactRequests: 'contact_requests',
   blockedUsers: 'blocked_users',
   messages: 'messages',
@@ -16,6 +18,19 @@ const COLLECTIONS = {
   callLogs: 'call_logs',
   deviceSessions: 'device_sessions',
 };
+
+const USERNAME_REGEX = /^(?!.*__)[a-z](?:[a-z0-9_]{1,18}[a-z0-9])$/;
+const USERNAME_CHANGE_LIMIT = 2;
+const USERNAME_CHANGE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const RESERVED_USERNAMES = new Set([
+  'admin',
+  'support',
+  'system',
+  'null',
+  'undefined',
+  'api',
+  'root',
+]);
 
 function now() {
   return new Date();
@@ -53,6 +68,49 @@ function sanitizeUser(user) {
   return cloned;
 }
 
+function usernameError(message, code = 'USERNAME_INVALID', statusCode = 400) {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = statusCode;
+  return error;
+}
+
+function normalizeUsername(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFKC');
+}
+
+function validateUsernamePolicy(username) {
+  if (!USERNAME_REGEX.test(username)) {
+    throw usernameError(
+      'Username must be 3-20 chars, start with a letter, use only a-z, 0-9, _, and cannot contain consecutive/trailing underscores',
+      'USERNAME_INVALID',
+      400
+    );
+  }
+  if (RESERVED_USERNAMES.has(username)) {
+    throw usernameError('Username is reserved', 'USERNAME_RESERVED', 400);
+  }
+}
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function pruneUsernameChangeHistory(history, referenceDate) {
+  const threshold = referenceDate.getTime() - USERNAME_CHANGE_WINDOW_MS;
+  return (Array.isArray(history) ? history : [])
+    .map((entry) => {
+      const date = entry instanceof Date ? entry : new Date(entry);
+      return Number.isNaN(date.getTime()) ? null : date;
+    })
+    .filter(Boolean)
+    .filter((date) => date.getTime() >= threshold)
+    .sort((a, b) => a.getTime() - b.getTime());
+}
+
 function usernamePrefixRange(prefixRaw) {
   const prefix = String(prefixRaw || '').trim().toLowerCase();
   return {
@@ -79,11 +137,12 @@ function deviceSessionDocId(userId, deviceId) {
 }
 
 function defaultUserPatch(input) {
-  const username = String(input.username || '').trim().toLowerCase();
+  const username = normalizeUsername(input.username);
   return {
     username,
     usernameLower: username,
-    email: input.email || '',
+    username_search: username,
+    email: normalizeEmail(input.email),
     avatar: input.avatar || `https://ui-avatars.com/api/?background=random&name=${encodeURIComponent(username || 'user')}`,
     about: input.about || 'Hey there! I am using ChatHeist.',
     socketId: null,
@@ -141,19 +200,20 @@ async function getUserById(userId, includePrivate = false) {
 }
 
 async function getUserByUsername(username) {
-  const normalized = String(username || '').trim().toLowerCase();
+  const normalized = normalizeUsername(username);
   if (!normalized) return null;
-  const snap = await db.collection(COLLECTIONS.users)
-    .where('usernameLower', '==', normalized)
-    .limit(1)
-    .get();
-  if (snap.empty) return null;
-  const docSnap = snap.docs[0];
+  const [searchSnap, lowerSnap] = await Promise.all([
+    db.collection(COLLECTIONS.users).where('username_search', '==', normalized).limit(1).get(),
+    db.collection(COLLECTIONS.users).where('usernameLower', '==', normalized).limit(1).get(),
+  ]);
+
+  const docSnap = searchSnap.docs[0] || lowerSnap.docs[0];
+  if (!docSnap) return null;
   return withIds(docSnap.id, docSnap.data());
 }
 
 async function getUserByEmail(email) {
-  const normalized = String(email || '').trim().toLowerCase();
+  const normalized = normalizeEmail(email);
   if (!normalized) return null;
   const snap = await db.collection(COLLECTIONS.users)
     .where('email', '==', normalized)
@@ -164,7 +224,116 @@ async function getUserByEmail(email) {
   return withIds(docSnap.id, docSnap.data());
 }
 
+async function updateUserWithUsernameReservation(userId, patch) {
+  const uid = String(userId);
+  const nextUsername = normalizeUsername(patch.username);
+  validateUsernamePolicy(nextUsername);
+
+  const { username: _usernameIgnored, ...rawPatch } = patch;
+  const patchWithoutUsername = { ...rawPatch };
+  if (Object.prototype.hasOwnProperty.call(patchWithoutUsername, 'email')) {
+    patchWithoutUsername.email = normalizeEmail(patchWithoutUsername.email);
+  }
+
+  const userRef = db.collection(COLLECTIONS.users).doc(uid);
+  const usernameRef = db.collection(COLLECTIONS.usernames).doc(nextUsername);
+  const reservedRef = db.collection(COLLECTIONS.reservedUsernames).doc(nextUsername);
+  const txNow = now();
+
+  await db.runTransaction(async (transaction) => {
+    const [userSnap, usernameSnap, reservedSnap] = await Promise.all([
+      transaction.get(userRef),
+      transaction.get(usernameRef),
+      transaction.get(reservedRef),
+    ]);
+
+    if (reservedSnap.exists) {
+      throw usernameError('Username is reserved', 'USERNAME_RESERVED', 400);
+    }
+
+    const existingUserData = userSnap.exists
+      ? normalizeValue(userSnap.data())
+      : defaultUserPatch({
+          username: nextUsername,
+          email: patchWithoutUsername.email,
+        });
+    const currentUsername = normalizeUsername(
+      existingUserData.username_search || existingUserData.usernameLower || existingUserData.username
+    );
+    const isRename = Boolean(currentUsername) && currentUsername !== nextUsername;
+
+    if (usernameSnap.exists) {
+      const ownerUid = String((usernameSnap.data() || {}).uid || '');
+      if (ownerUid && ownerUid !== uid) {
+        throw usernameError('Username already exists', 'USERNAME_TAKEN', 409);
+      }
+    }
+
+    if (isRename) {
+      const recentChanges = pruneUsernameChangeHistory(
+        existingUserData.usernameChangeTimestamps,
+        txNow
+      );
+      if (recentChanges.length >= USERNAME_CHANGE_LIMIT) {
+        throw usernameError(
+          `Username can be changed only ${USERNAME_CHANGE_LIMIT} times in 30 days`,
+          'USERNAME_CHANGE_RATE_LIMITED',
+          429
+        );
+      }
+      recentChanges.push(txNow);
+      patchWithoutUsername.usernameChangeTimestamps = recentChanges;
+      patchWithoutUsername.lastUsernameChangeAt = txNow;
+    }
+
+    if (isRename) {
+      const previousUsernameRef = db.collection(COLLECTIONS.usernames).doc(currentUsername);
+      const previousUsernameSnap = await transaction.get(previousUsernameRef);
+      if (previousUsernameSnap.exists) {
+        const ownerUid = String((previousUsernameSnap.data() || {}).uid || '');
+        if (!ownerUid || ownerUid === uid) {
+          transaction.delete(previousUsernameRef);
+        }
+      }
+    }
+
+    const mergedUser = {
+      ...existingUserData,
+      ...patchWithoutUsername,
+      username: nextUsername,
+      usernameLower: nextUsername,
+      username_search: nextUsername,
+      email: normalizeEmail(
+        Object.prototype.hasOwnProperty.call(patchWithoutUsername, 'email')
+          ? patchWithoutUsername.email
+          : existingUserData.email
+      ),
+      updatedAt: txNow,
+      createdAt: existingUserData.createdAt || txNow,
+    };
+
+    transaction.set(
+      usernameRef,
+      {
+        uid,
+        username_search: nextUsername,
+        updatedAt: txNow,
+        createdAt: (usernameSnap.exists && usernameSnap.data()?.createdAt) || txNow,
+      },
+      { merge: true }
+    );
+
+    transaction.set(userRef, mergedUser, { merge: true });
+  });
+
+  return getUserById(uid, true);
+}
+
 async function createOrMergeUser(uid, patch) {
+  if (Object.prototype.hasOwnProperty.call(patch, 'username')) {
+    return updateUserWithUsernameReservation(uid, patch);
+  }
+
   const userRef = db.collection(COLLECTIONS.users).doc(String(uid));
   const existing = await userRef.get();
   const base = existing.exists ? normalizeValue(existing.data()) : defaultUserPatch(patch);
@@ -172,9 +341,10 @@ async function createOrMergeUser(uid, patch) {
   const merged = {
     ...base,
     ...patch,
-    username: String((patch.username ?? base.username) || '').trim().toLowerCase(),
-    usernameLower: String((patch.username ?? base.username) || '').trim().toLowerCase(),
-    email: String((patch.email ?? base.email) || '').trim().toLowerCase(),
+    username: normalizeUsername(patch.username ?? base.username),
+    usernameLower: normalizeUsername(patch.username ?? base.username),
+    username_search: normalizeUsername(patch.username ?? base.username ?? base.username_search),
+    email: normalizeEmail(patch.email ?? base.email),
     updatedAt: now(),
     createdAt: base.createdAt || now(),
   };
@@ -185,14 +355,15 @@ async function createOrMergeUser(uid, patch) {
 }
 
 async function updateUser(userId, patch) {
+  if (Object.prototype.hasOwnProperty.call(patch, 'username')) {
+    return updateUserWithUsernameReservation(userId, patch);
+  }
+
   const ref = db.collection(COLLECTIONS.users).doc(String(userId));
   const updatePatch = {
     ...patch,
-    ...(Object.prototype.hasOwnProperty.call(patch, 'username')
-      ? {
-          username: String(patch.username || '').trim().toLowerCase(),
-          usernameLower: String(patch.username || '').trim().toLowerCase(),
-        }
+    ...(Object.prototype.hasOwnProperty.call(patch, 'email')
+      ? { email: normalizeEmail(patch.email) }
       : {}),
     updatedAt: now(),
   };
@@ -201,13 +372,18 @@ async function updateUser(userId, patch) {
 }
 
 async function searchUsers(prefix, excludeUserId, limit = 20) {
-  const normalizedPrefix = String(prefix || '').trim().toLowerCase();
+  const normalizedPrefix = normalizeUsername(prefix);
   const { start, end } = usernamePrefixRange(normalizedPrefix);
   if (!start || start.length < 2) return [];
 
   // Primary query uses normalized field. Fallback query supports older records
   // that may not yet have usernameLower populated.
-  const [lowerSnap, legacySnap] = await Promise.all([
+  const [searchSnap, lowerSnap, legacySnap] = await Promise.all([
+    db.collection(COLLECTIONS.users)
+      .where('username_search', '>=', start)
+      .where('username_search', '<=', end)
+      .limit(limit)
+      .get(),
     db.collection(COLLECTIONS.users)
       .where('usernameLower', '>=', start)
       .where('usernameLower', '<=', end)
@@ -222,7 +398,7 @@ async function searchUsers(prefix, excludeUserId, limit = 20) {
 
   const seen = new Set();
   const merged = [];
-  for (const docSnap of [...lowerSnap.docs, ...legacySnap.docs]) {
+  for (const docSnap of [...searchSnap.docs, ...lowerSnap.docs, ...legacySnap.docs]) {
     if (seen.has(docSnap.id)) continue;
     seen.add(docSnap.id);
     merged.push(withIds(docSnap.id, docSnap.data()));

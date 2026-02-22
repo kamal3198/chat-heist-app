@@ -13,6 +13,7 @@ const {
 } = require('../services/store');
 
 const router = express.Router();
+const USERNAME_REGEX = /^(?!.*__)[a-z](?:[a-z0-9_]{1,18}[a-z0-9])$/;
 
 const baseAuthSchema = {
   deviceId: z.string().trim().min(1).optional(),
@@ -52,6 +53,42 @@ function fallbackEmailFromUsername(username) {
   return `${clean || `user${Date.now()}`}@chatheist.local`;
 }
 
+function canonicalizeUsernameSeed(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFKC')
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function buildValidUsername(baseValue, uid) {
+  let candidate = canonicalizeUsernameSeed(baseValue);
+  const uidSeed = String(uid || '').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'userseed';
+
+  if (!candidate || !/^[a-z]/.test(candidate)) {
+    candidate = `u${candidate}`;
+  }
+
+  candidate = candidate.replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  if (candidate.length > 20) candidate = candidate.slice(0, 20);
+  candidate = candidate.replace(/_+$/g, '');
+
+  let i = 0;
+  while (candidate.length < 3 && i < uidSeed.length) {
+    candidate += uidSeed[i];
+    i += 1;
+  }
+
+  if (!USERNAME_REGEX.test(candidate)) {
+    const fallback = `u${uidSeed.slice(0, 19)}`.slice(0, 20).replace(/_+$/g, '');
+    candidate = USERNAME_REGEX.test(fallback) ? fallback : `user${uidSeed.slice(0, 16)}`;
+  }
+
+  return candidate;
+}
+
 async function identityToolkit(path, payload) {
   if (!env.firebaseWebApiKey) {
     throw new Error('Missing FIREBASE_WEB_API_KEY');
@@ -74,19 +111,21 @@ async function identityToolkit(path, payload) {
 }
 
 async function resolveUniqueUsername(uid, usernameCandidate, emailCandidate) {
-  let username = String(usernameCandidate || '').trim().toLowerCase();
+  let username = buildValidUsername(usernameCandidate, uid);
   if (!username) {
     const email = String(emailCandidate || '').trim().toLowerCase();
     if (email.includes('@')) {
-      username = email.split('@')[0];
+      username = buildValidUsername(email.split('@')[0], uid);
     } else {
-      username = `user_${String(uid).slice(0, 8)}`;
+      username = buildValidUsername(`user_${String(uid).slice(0, 8)}`, uid);
     }
   }
 
   const existingByUsername = await getUserByUsername(username);
   if (existingByUsername && String(existingByUsername._id) !== String(uid)) {
-    username = `${username}_${String(uid).slice(0, 6)}`;
+    const suffix = String(uid).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 6) || 'u12345';
+    const base = username.slice(0, Math.max(3, 20 - (suffix.length + 1))).replace(/_+$/g, '');
+    username = buildValidUsername(`${base}_${suffix}`, uid);
   }
 
   return username;
@@ -151,12 +190,6 @@ router.post('/register', async (req, res) => {
     }
 
     const normalizedUsername = body.username ? body.username.toLowerCase() : null;
-    if (normalizedUsername) {
-      const exists = await getUserByUsername(normalizedUsername);
-      if (exists) {
-        return res.status(400).json({ error: 'Username already exists' });
-      }
-    }
 
     const email = body.email ? body.email.toLowerCase() : fallbackEmailFromUsername(normalizedUsername);
     const signUp = await identityToolkit('accounts:signUp', {

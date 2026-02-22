@@ -10,7 +10,6 @@ const {
   listRequestsByReceiver,
   listBlocksInvolvingUser,
   getUserById,
-  getUserByUsername,
   updateUser,
   sanitizeUser,
 } = require('../services/store');
@@ -92,17 +91,7 @@ router.put('/me', auth, upload.single('avatar'), async (req, res) => {
     const { username, about } = req.body;
 
     if (typeof username === 'string') {
-      const normalizedUsername = username.trim().toLowerCase();
-      if (normalizedUsername.length < 3) {
-        return res.status(400).json({ error: 'Username must be at least 3 characters' });
-      }
-
-      const existing = await getUserByUsername(normalizedUsername);
-      if (existing && existing._id !== req.userId) {
-        return res.status(400).json({ error: 'Username already exists' });
-      }
-
-      patch.username = normalizedUsername;
+      patch.username = username;
     }
 
     if (typeof about === 'string') {
@@ -119,6 +108,9 @@ router.put('/me', auth, upload.single('avatar'), async (req, res) => {
       user: sanitizeUser(updated),
     });
   } catch (error) {
+    if (error?.statusCode && error?.code?.startsWith('USERNAME_')) {
+      return res.status(error.statusCode).json({ error: error.message });
+    }
     return res.status(500).json({ error: 'Server error' });
   }
 });
