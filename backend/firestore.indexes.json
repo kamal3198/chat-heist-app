@@ -33,6 +33,14 @@
         { "queryScope": "COLLECTION", "order": "ASCENDING" },
         { "queryScope": "COLLECTION", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "users_public",
+      "fieldPath": "username_search",
+      "indexes": [
+        { "queryScope": "COLLECTION", "order": "ASCENDING" },
+        { "queryScope": "COLLECTION", "order": "DESCENDING" }
+      ]
     }
   ]
 }

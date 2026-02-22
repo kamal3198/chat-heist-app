@@ -6,6 +6,7 @@ const FieldValue = admin.firestore.FieldValue;
 
 const COLLECTIONS = {
   users: 'users',
+  usersPublic: 'users_public',
   usernames: 'usernames',
   reservedUsernames: 'reserved_usernames',
   contactRequests: 'contact_requests',
@@ -66,6 +67,19 @@ function sanitizeUser(user) {
   const cloned = { ...user };
   delete cloned.password;
   return cloned;
+}
+
+function publicUserProjection(userId, userData = {}) {
+  return {
+    uid: String(userId),
+    username: String(userData.username || ''),
+    username_search: String(userData.username_search || userData.usernameLower || userData.username || ''),
+    displayName: String(userData.displayName || userData.username || ''),
+    photoUrl: String(userData.avatar || ''),
+    isOnline: Boolean(userData.isOnline),
+    updatedAt: userData.updatedAt || now(),
+    createdAt: userData.createdAt || now(),
+  };
 }
 
 function usernameError(message, code = 'USERNAME_INVALID', statusCode = 400) {
@@ -236,6 +250,7 @@ async function updateUserWithUsernameReservation(userId, patch) {
   }
 
   const userRef = db.collection(COLLECTIONS.users).doc(uid);
+  const userPublicRef = db.collection(COLLECTIONS.usersPublic).doc(uid);
   const usernameRef = db.collection(COLLECTIONS.usernames).doc(nextUsername);
   const reservedRef = db.collection(COLLECTIONS.reservedUsernames).doc(nextUsername);
   const txNow = now();
@@ -324,6 +339,7 @@ async function updateUserWithUsernameReservation(userId, patch) {
     );
 
     transaction.set(userRef, mergedUser, { merge: true });
+    transaction.set(userPublicRef, publicUserProjection(uid, mergedUser), { merge: true });
   });
 
   return getUserById(uid, true);
@@ -350,6 +366,8 @@ async function createOrMergeUser(uid, patch) {
   };
 
   await userRef.set(merged, { merge: true });
+  const userPublicRef = db.collection(COLLECTIONS.usersPublic).doc(String(uid));
+  await userPublicRef.set(publicUserProjection(uid, merged), { merge: true });
   const finalDoc = await userRef.get();
   return withIds(finalDoc.id, finalDoc.data());
 }
@@ -368,7 +386,12 @@ async function updateUser(userId, patch) {
     updatedAt: now(),
   };
   await ref.set(updatePatch, { merge: true });
-  return getUserById(userId, true);
+  const updated = await getUserById(userId, true);
+  if (updated) {
+    const userPublicRef = db.collection(COLLECTIONS.usersPublic).doc(String(userId));
+    await userPublicRef.set(publicUserProjection(userId, updated), { merge: true });
+  }
+  return updated;
 }
 
 async function searchUsers(prefix, excludeUserId, limit = 20) {
@@ -380,18 +403,21 @@ async function searchUsers(prefix, excludeUserId, limit = 20) {
   // that may not yet have usernameLower populated.
   const [searchSnap, lowerSnap, legacySnap] = await Promise.all([
     db.collection(COLLECTIONS.users)
-      .where('username_search', '>=', start)
-      .where('username_search', '<=', end)
+      .orderBy('username_search')
+      .startAt(start)
+      .endAt(end)
       .limit(limit)
       .get(),
     db.collection(COLLECTIONS.users)
-      .where('usernameLower', '>=', start)
-      .where('usernameLower', '<=', end)
+      .orderBy('usernameLower')
+      .startAt(start)
+      .endAt(end)
       .limit(limit)
       .get(),
     db.collection(COLLECTIONS.users)
-      .where('username', '>=', start)
-      .where('username', '<=', end)
+      .orderBy('username')
+      .startAt(start)
+      .endAt(end)
       .limit(limit)
       .get(),
   ]);
@@ -407,6 +433,7 @@ async function searchUsers(prefix, excludeUserId, limit = 20) {
   return merged
     .filter((user) => user._id !== String(excludeUserId))
     .filter((user) => String(user.username || '').toLowerCase().startsWith(normalizedPrefix))
+    .filter((user) => Boolean(user.username_search || user.usernameLower || user.username))
     .slice(0, limit)
     .map(sanitizeUser);
 }

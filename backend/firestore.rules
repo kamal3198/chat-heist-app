@@ -21,6 +21,17 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    function validUserPublicSearchQuery() {
+      return request.query.limit != null &&
+             request.query.limit <= 20;
+    }
+
+    match /users_public/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && validUserPublicSearchQuery();
+      allow write: if false;
+    }
+
     match /usernames/{username} {
       allow read, write: if false;
     }

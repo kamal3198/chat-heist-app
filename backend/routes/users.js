@@ -18,13 +18,16 @@ router.get('/search', authMiddleware, async (req, res) => {
   try {
     const username = String(req.query.username || '').trim();
     const currentUserId = req.user?.uid || req.userId;
+    const normalized = username.toLowerCase();
 
-    if (!username || username.length < 2) {
+    if (!normalized || normalized.length < 2) {
       return res.json({ users: [] });
     }
 
+    console.log('[users/search] normalized query:', normalized);
+
     const [users, sent, received, blocked] = await Promise.all([
-      searchUsers(username, currentUserId, 20),
+      searchUsers(normalized, currentUserId, 20),
       listRequestsBySender(currentUserId),
       listRequestsByReceiver(currentUserId),
       listBlocksInvolvingUser(currentUserId),
@@ -45,7 +48,13 @@ router.get('/search', authMiddleware, async (req, res) => {
 
       if (blockedIds.has(userId)) {
         return {
-          ...user,
+          _id: userId,
+          id: userId,
+          uid: userId,
+          username: user.username || '',
+          displayName: user.displayName || user.username || '',
+          avatar: user.avatar || '',
+          photoUrl: user.avatar || '',
           requestStatus: 'blocked',
           requestId: null,
         };
@@ -63,15 +72,24 @@ router.get('/search', authMiddleware, async (req, res) => {
       }
 
       return {
-        ...user,
+        _id: userId,
+        id: userId,
+        uid: userId,
+        username: user.username || '',
+        displayName: user.displayName || user.username || '',
+        avatar: user.avatar || '',
+        photoUrl: user.avatar || '',
         requestStatus: status,
         requestId: request?._id || null,
       };
     });
 
+    console.log('[users/search] result size:', usersWithStatus.length);
+    console.log('[users/search] user ids:', usersWithStatus.map((u) => u.uid));
+
     return res.json({ users: usersWithStatus });
   } catch (error) {
-    console.error('User search error:', error);
+    console.error('User search error:', error?.message || error);
     return res.status(500).json({ error: 'Server error' });
   }
 });

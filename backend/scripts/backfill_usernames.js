@@ -61,6 +61,7 @@ async function run() {
       const usernameSearch = buildCandidate({ ...data, id });
 
       const reservationRef = db.collection('usernames').doc(usernameSearch);
+      const publicRef = db.collection('users_public').doc(id);
       const reservationSnap = await reservationRef.get();
       const owner = reservationSnap.exists ? String((reservationSnap.data() || {}).uid || '') : '';
       if (owner && owner !== id) {
@@ -77,6 +78,20 @@ async function run() {
             usernameLower: usernameSearch,
             username_search: usernameSearch,
             updatedAt: new Date(),
+          },
+          { merge: true }
+        );
+        batch.set(
+          publicRef,
+          {
+            uid: id,
+            username: usernameSearch,
+            username_search: usernameSearch,
+            displayName: data.displayName || usernameSearch,
+            photoUrl: data.avatar || '',
+            isOnline: Boolean(data.isOnline),
+            updatedAt: new Date(),
+            createdAt: data.createdAt || new Date(),
           },
           { merge: true }
         );
@@ -125,4 +140,3 @@ run().catch((error) => {
   console.error('Backfill failed:', error);
   process.exit(1);
 });
-
