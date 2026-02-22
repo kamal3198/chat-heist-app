@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const auth = require('../middleware/auth');
+const authMiddleware = require('../middleware/authMiddleware');
 const upload = require('../middleware/upload');
 const {
   searchUsers,
@@ -14,10 +15,10 @@ const {
   sanitizeUser,
 } = require('../services/store');
 
-router.get('/search', auth, async (req, res) => {
+router.get('/search', authMiddleware, async (req, res) => {
   try {
     const username = String(req.query.username || '').trim();
-    const currentUserId = req.userId;
+    const currentUserId = req.user?.uid || req.userId;
 
     if (!username || username.length < 2) {
       return res.json({ users: [] });
