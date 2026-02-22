@@ -100,6 +100,14 @@ app.use('/devices', deviceSessionsRoutes);
 app.use('/calls', callsRoutes);
 app.use('/ai', aiRoutes);
 
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    service: 'chatheist-api',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.get('/', (req, res) => {
   res.json({
     message: 'ChatHeist API',
