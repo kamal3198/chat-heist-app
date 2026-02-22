@@ -5,15 +5,28 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isOwner(field) {
-      return isSignedIn() && request.auth.uid == resource.data[field];
+    function immutableUsernameFields() {
+      return request.resource.data.username_search == resource.data.username_search &&
+             request.resource.data.usernameLower == resource.data.usernameLower &&
+             request.resource.data.username == resource.data.username &&
+             request.resource.data.lastUsernameChangeAt == resource.data.lastUsernameChangeAt &&
+             request.resource.data.usernameChangeTimestamps == resource.data.usernameChangeTimestamps;
     }
 
     match /users/{userId} {
-      allow read: if isSignedIn();
+      allow get: if isSignedIn();
+      allow list: if false;
       allow create: if isSignedIn() && request.auth.uid == userId;
-      allow update: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && request.auth.uid == userId && immutableUsernameFields();
       allow delete: if false;
+    }
+
+    match /usernames/{username} {
+      allow read, write: if false;
+    }
+
+    match /reserved_usernames/{username} {
+      allow read, write: if false;
     }
 
     match /contact_requests/{requestId} {

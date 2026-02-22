@@ -17,6 +17,9 @@ const notFound = require('./middleware/not-found');
 const app = express();
 const server = http.createServer(app);
 const PORT = Number(process.env.PORT || env.port || 3000);
+server.requestTimeout = env.serverRequestTimeoutMs;
+server.headersTimeout = env.serverHeadersTimeoutMs;
+server.keepAliveTimeout = env.serverKeepAliveTimeoutMs;
 
 function isAllowedOrigin(origin) {
   if (env.corsOrigins.includes('*')) return true;

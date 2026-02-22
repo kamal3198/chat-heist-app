@@ -5,7 +5,11 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "preflight:render": "node scripts/render_preflight.js",
+    "backfill:usernames:dry": "node scripts/backfill_usernames.js",
+    "backfill:usernames:apply": "node scripts/backfill_usernames.js --apply",
+    "test:username-race": "node scripts/username_race_test.js"
   },
   "keywords": [
     "chat",

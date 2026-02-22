@@ -20,6 +20,10 @@ const env = {
   firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL || '',
   firebasePrivateKey: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
   firebaseStorageBucket: process.env.FIREBASE_STORAGE_BUCKET || '',
+  firebaseWebApiKey: process.env.FIREBASE_WEB_API_KEY || '',
+  serverRequestTimeoutMs: Number(process.env.SERVER_REQUEST_TIMEOUT_MS || 60_000),
+  serverHeadersTimeoutMs: Number(process.env.SERVER_HEADERS_TIMEOUT_MS || 65_000),
+  serverKeepAliveTimeoutMs: Number(process.env.SERVER_KEEP_ALIVE_TIMEOUT_MS || 60_000),
   logLevel: process.env.LOG_LEVEL || 'info',
 };
 
