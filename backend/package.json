@@ -2,9 +2,9 @@
   "name": "whatsapp-clone-backend",
   "version": "2.0.0",
   "description": "WhatsApp clone backend powered by Firebase Firestore",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node index.js",
     "dev": "nodemon server.js"
   },
   "keywords": [
