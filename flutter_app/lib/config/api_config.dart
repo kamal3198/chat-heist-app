@@ -1,27 +1,29 @@
 import 'package:flutter/foundation.dart';
 
 class ApiConfig {
+  static const String _appEnv = String.fromEnvironment('APP_ENV', defaultValue: 'prod');
   static const String _envBaseUrl =
-      String.fromEnvironment('API_BASE_URL', defaultValue: '');
+      String.fromEnvironment('API_BASE_URL', defaultValue: 'https://chat-heist-app.onrender.com');
 
   static String get baseUrl {
-    if (_envBaseUrl.isNotEmpty) {
-      return _normalize(_envBaseUrl);
+    final normalizedEnvUrl = _normalize(_envBaseUrl);
+    if (normalizedEnvUrl.isNotEmpty) {
+      return _validate(normalizedEnvUrl);
     }
 
     if (kIsWeb) {
-      return 'http://localhost:3000';
+      return _validate('https://chat-heist-app.onrender.com');
     }
 
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
-        return 'http://10.0.2.2:3000';
+        return _validate('https://chat-heist-app.onrender.com');
       case TargetPlatform.iOS:
       case TargetPlatform.macOS:
       case TargetPlatform.windows:
       case TargetPlatform.linux:
       case TargetPlatform.fuchsia:
-        return 'http://localhost:3000';
+        return _validate('https://chat-heist-app.onrender.com');
     }
   }
 
@@ -29,6 +31,13 @@ class ApiConfig {
 
   static String _normalize(String url) {
     return url.endsWith('/') ? url.substring(0, url.length - 1) : url;
+  }
+
+  static String _validate(String url) {
+    if (_appEnv == 'prod' && !url.startsWith('https://')) {
+      throw StateError('Production API_BASE_URL must use HTTPS');
+    }
+    return url;
   }
 
   static String resolveMediaUrl(String? pathOrUrl) {

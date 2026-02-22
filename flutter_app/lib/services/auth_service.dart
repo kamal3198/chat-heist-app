@@ -18,6 +18,10 @@ class AuthService {
   static const _deviceSessionIdKey = 'device_session_id';
   static const _deviceIdKey = 'device_id';
   static const Duration _requestTimeout = Duration(seconds: 15);
+  static const List<Duration> _retryBackoff = <Duration>[
+    Duration(milliseconds: 700),
+    Duration(seconds: 2),
+  ];
 
   final fb.FirebaseAuth _firebaseAuth = fb.FirebaseAuth.instance;
   final GoogleSignIn _googleSignIn = GoogleSignIn();
@@ -25,10 +29,11 @@ class AuthService {
   String _connectionError(Object error) {
     if (error is SocketException || error is HttpException) {
       return 'Cannot reach server at ${ApiConfig.baseUrl}. '
-          'Start backend and ensure mobile uses your machine IP via --dart-define=API_BASE_URL=http://YOUR_IP:3000';
+          'Verify internet access and backend availability.';
     }
     if (error is TimeoutException) {
-      return 'Request timed out while connecting to ${ApiConfig.baseUrl}. Check backend/network and try again.';
+      return 'Request timed out while connecting to ${ApiConfig.baseUrl}. '
+          'This can happen when Render wakes up from sleep; please retry.';
     }
     if (error is fb.FirebaseAuthException) {
       return error.message ?? 'Firebase authentication failed';
@@ -74,17 +79,16 @@ class AuthService {
     String? email,
   }) async {
     final meta = await _deviceMeta();
-
-    final response = await http.post(
+    final payload = {
+      'idToken': idToken,
+      if (username != null && username.trim().isNotEmpty) 'username': username.trim(),
+      if (email != null && email.trim().isNotEmpty) 'email': email.trim(),
+      ...meta,
+    };
+    final response = await _postWithRetry(
       Uri.parse('${ApiConfig.baseUrl}${ApiConfig.firebaseSession}'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'idToken': idToken,
-        if (username != null && username.trim().isNotEmpty) 'username': username.trim(),
-        if (email != null && email.trim().isNotEmpty) 'email': email.trim(),
-        ...meta,
-      }),
-    ).timeout(_requestTimeout);
+      payload,
+    );
 
     final data = _safeJson(response.body);
 
@@ -101,6 +105,38 @@ class AuthService {
       'success': false,
       'error': data['error'] ?? 'Authentication sync failed',
     };
+  }
+
+  Future<http.Response> _postWithRetry(
+    Uri uri,
+    Map<String, dynamic> payload,
+  ) async {
+    Object? lastError;
+    final attempts = _retryBackoff.length + 1;
+
+    for (var attempt = 0; attempt < attempts; attempt++) {
+      try {
+        return await http
+            .post(
+              uri,
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode(payload),
+            )
+            .timeout(_requestTimeout);
+      } on TimeoutException catch (e) {
+        lastError = e;
+      } on SocketException catch (e) {
+        lastError = e;
+      } on HttpException catch (e) {
+        lastError = e;
+      }
+
+      if (attempt < _retryBackoff.length) {
+        await Future.delayed(_retryBackoff[attempt]);
+      }
+    }
+
+    throw lastError ?? TimeoutException('Request failed');
   }
 
   Map<String, dynamic> _safeJson(String body) {
