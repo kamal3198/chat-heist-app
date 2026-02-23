@@ -36,12 +36,22 @@ router.get('/search', authMiddleware, async (req, res) => {
     let sent = [];
     let received = [];
     let blocked = [];
+    let acceptedContactIds = new Set();
     try {
-      [sent, received, blocked] = await Promise.all([
+      const [currentUser, sentRequests, receivedRequests, blockEntries] = await Promise.all([
+        getUserById(currentUserId, true),
         listRequestsBySender(currentUserId),
         listRequestsByReceiver(currentUserId),
         listBlocksInvolvingUser(currentUserId),
       ]);
+      sent = sentRequests;
+      received = receivedRequests;
+      blocked = blockEntries;
+      acceptedContactIds = new Set(
+        (Array.isArray(currentUser?.contacts) ? currentUser.contacts : [])
+          .map((id) => String(id))
+          .filter(Boolean)
+      );
     } catch (dependencyError) {
       console.error('[users/search] dependency query failed:', dependencyError?.message || dependencyError);
       if (dependencyError?.stack) {
@@ -50,6 +60,7 @@ router.get('/search', authMiddleware, async (req, res) => {
       sent = [];
       received = [];
       blocked = [];
+      acceptedContactIds = new Set();
     }
 
     const requestByOtherUser = new Map();
@@ -104,7 +115,9 @@ router.get('/search', authMiddleware, async (req, res) => {
       const request = requestByOtherUser.get(userId);
       let status = 'none';
 
-      if (request) {
+      if (acceptedContactIds.has(userId)) {
+        status = 'accepted';
+      } else if (request) {
         if (request?.status === 'accepted') {
           status = 'accepted';
         } else if (request?.status === 'pending') {

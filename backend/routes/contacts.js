@@ -3,7 +3,6 @@ const router = express.Router();
 
 const auth = require('../middleware/auth');
 const {
-  listAcceptedRequestsForUser,
   listBlockedByUser,
   getUsersMap,
   getUserById,
@@ -13,26 +12,25 @@ const {
   listRequestsByReceiver,
   listRequestsBySender,
   getContactRequestById,
-  setContactRequestStatus,
+  acceptRequestByUserIds,
   removeAcceptedContact,
   populateByUserFields,
+  getAcceptedContactIds,
 } = require('../services/store');
 
 router.get('/', auth, async (req, res) => {
   try {
     const userId = req.userId;
-    const [acceptedRequests, blockedUsers] = await Promise.all([
-      listAcceptedRequestsForUser(userId),
+    const [contactIds, blockedUsers] = await Promise.all([
+      getAcceptedContactIds(userId),
       listBlockedByUser(userId),
     ]);
 
     const blockedIds = new Set(blockedUsers.map((entry) => String(entry.blocked)));
-    const contactIds = acceptedRequests
-      .map((request) => (request.sender === userId ? request.receiver : request.sender))
-      .filter((id) => !blockedIds.has(String(id)));
+    const visibleContactIds = contactIds.filter((id) => !blockedIds.has(String(id)));
 
-    const usersMap = await getUsersMap(contactIds, false);
-    const contacts = contactIds.map((id) => usersMap.get(String(id))).filter(Boolean);
+    const usersMap = await getUsersMap(visibleContactIds, false);
+    const contacts = visibleContactIds.map((id) => usersMap.get(String(id))).filter(Boolean);
 
     return res.json({ contacts });
   } catch (error) {
@@ -124,7 +122,7 @@ router.put('/request/:id/accept', auth, async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
-    const updated = await setContactRequestStatus(requestId, 'accepted');
+    const updated = await acceptRequestByUserIds(userId, request.sender);
     const populated = await populateByUserFields(updated, ['sender', 'receiver']);
 
     const io = req.app.get('io');
@@ -138,7 +136,43 @@ router.put('/request/:id/accept', auth, async (req, res) => {
       request: populated,
     });
   } catch (error) {
+    if (error?.statusCode === 404) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (error?.statusCode === 403) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
     return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/accept-request', auth, async (req, res) => {
+  try {
+    const { currentUserId, senderId } = req.body || {};
+
+    if (!currentUserId || !senderId) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    if (String(currentUserId) !== String(req.userId)) {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    console.log('Current:', currentUserId);
+    console.log('Sender:', senderId);
+
+    await acceptRequestByUserIds(currentUserId, senderId);
+
+    return res.status(200).json({ message: 'Request accepted successfully' });
+  } catch (error) {
+    console.error('Accept Request Error:', error);
+    if (error?.statusCode === 404) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    if (error?.statusCode === 403) {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+    return res.status(500).json({ message: 'Internal server error' });
   }
 });
 
@@ -160,6 +194,28 @@ router.put('/request/:id/reject', auth, async (req, res) => {
     return res.json({ message: 'Request rejected' });
   } catch (error) {
     return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/:id', auth, async (req, res) => {
+  try {
+    const userId = String(req.params.id);
+    const user = await getUserById(userId, true);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const contactIds = Array.isArray(user.contacts)
+      ? user.contacts.map((id) => String(id)).filter(Boolean)
+      : [];
+    const usersMap = await getUsersMap(contactIds, false);
+    const contacts = contactIds.map((id) => usersMap.get(String(id))).filter(Boolean);
+
+    return res.status(200).json(contacts);
+  } catch (error) {
+    console.error('Fetch Contacts Error:', error);
+    return res.status(500).json({ message: 'Internal server error' });
   }
 });
 

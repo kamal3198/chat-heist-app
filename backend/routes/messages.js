@@ -5,7 +5,7 @@ const auth = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const {
   bulkDeleteMessagesForUser,
-  getContactRequestByPair,
+  areUsersContacts,
   isEitherBlocked,
   getConversationMessages,
   populateByUserFields,
@@ -38,8 +38,7 @@ router.get('/:contactId', auth, async (req, res) => {
     const userId = req.userId;
     const contactId = String(req.params.contactId);
 
-    const relation = await getContactRequestByPair(userId, contactId);
-    const isContact = relation && relation.status === 'accepted';
+    const isContact = await areUsersContacts(userId, contactId);
 
     if (!isContact) {
       return res.status(403).json({ error: 'Not contacts' });

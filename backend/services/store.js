@@ -517,6 +517,76 @@ async function setContactRequestStatus(requestId, status) {
   return getContactRequestById(requestId);
 }
 
+async function acceptRequestByUserIds(currentUserId, senderId) {
+  const currentId = String(currentUserId);
+  const sender = String(senderId);
+  const requestId = pairKey(currentId, sender);
+
+  const currentUserRef = db.collection(COLLECTIONS.users).doc(currentId);
+  const senderRef = db.collection(COLLECTIONS.users).doc(sender);
+  const requestRef = db.collection(COLLECTIONS.contactRequests).doc(requestId);
+  let acceptedRequest = null;
+
+  await db.runTransaction(async (transaction) => {
+    const [currentSnap, senderSnap, requestSnap] = await Promise.all([
+      transaction.get(currentUserRef),
+      transaction.get(senderRef),
+      transaction.get(requestRef),
+    ]);
+
+    if (!currentSnap.exists || !senderSnap.exists) {
+      const error = new Error('User not found');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const requestData = requestSnap.exists ? normalizeValue(requestSnap.data()) : null;
+    const requestReceiver = String(requestData?.receiver || '');
+    const requestSender = String(requestData?.sender || sender);
+
+    if (requestSnap.exists && requestReceiver && requestReceiver !== currentId) {
+      const error = new Error('Unauthorized');
+      error.statusCode = 403;
+      throw error;
+    }
+
+    transaction.set(
+      currentUserRef,
+      {
+        contacts: FieldValue.arrayUnion(sender),
+        requests: FieldValue.arrayRemove(sender),
+        updatedAt: now(),
+      },
+      { merge: true }
+    );
+
+    transaction.set(
+      senderRef,
+      {
+        contacts: FieldValue.arrayUnion(currentId),
+        updatedAt: now(),
+      },
+      { merge: true }
+    );
+
+    if (requestSnap.exists) {
+      transaction.delete(requestRef);
+    }
+
+    acceptedRequest = {
+      _id: requestId,
+      id: requestId,
+      sender: requestSender,
+      receiver: currentId,
+      status: 'accepted',
+      createdAt: requestData?.createdAt || now(),
+      updatedAt: now(),
+    };
+  });
+
+  return acceptedRequest;
+}
+
 async function listRequestsBySender(senderId, status = null) {
   let query = db.collection(COLLECTIONS.contactRequests).where('sender', '==', String(senderId));
   if (status) query = query.where('status', '==', status);
@@ -540,17 +610,54 @@ async function listAcceptedRequestsForUser(userId) {
 }
 
 async function removeAcceptedContact(userA, userB) {
-  const id = pairKey(userA, userB);
-  const existing = await getContactRequestById(id);
-  if (!existing || existing.status !== 'accepted') return false;
-  await db.collection(COLLECTIONS.contactRequests).doc(id).delete();
+  const userAId = String(userA);
+  const userBId = String(userB);
+  const requestId = pairKey(userAId, userBId);
+
+  const userARef = db.collection(COLLECTIONS.users).doc(userAId);
+  const userBRef = db.collection(COLLECTIONS.users).doc(userBId);
+  const requestRef = db.collection(COLLECTIONS.contactRequests).doc(requestId);
+
+  const batch = db.batch();
+  batch.set(
+    userARef,
+    {
+      contacts: FieldValue.arrayRemove(userBId),
+      updatedAt: now(),
+    },
+    { merge: true }
+  );
+  batch.set(
+    userBRef,
+    {
+      contacts: FieldValue.arrayRemove(userAId),
+      updatedAt: now(),
+    },
+    { merge: true }
+  );
+  batch.delete(requestRef);
+  await batch.commit();
   return true;
 }
 
 async function getAcceptedContactIds(userId) {
-  const requests = await listAcceptedRequestsForUser(userId);
   const uid = String(userId);
-  return requests.map((request) => (request.sender === uid ? request.receiver : request.sender));
+  const user = await getUserById(uid, true);
+  const contacts = Array.isArray(user?.contacts) ? user.contacts.map(String).filter(Boolean) : [];
+
+  const requests = await listAcceptedRequestsForUser(uid);
+  const requestContacts = requests
+    .map((request) => (String(request.sender) === uid ? String(request.receiver) : String(request.sender)))
+    .filter(Boolean);
+
+  return Array.from(new Set([...contacts, ...requestContacts]));
+}
+
+async function areUsersContacts(userA, userB) {
+  const userAId = String(userA);
+  const userBId = String(userB);
+  const contactIds = await getAcceptedContactIds(userAId);
+  return contactIds.includes(userBId);
 }
 
 async function blockUser(blockerId, blockedId) {
@@ -955,11 +1062,13 @@ module.exports = {
   getContactRequestByPair,
   createContactRequest,
   setContactRequestStatus,
+  acceptRequestByUserIds,
   listRequestsBySender,
   listRequestsByReceiver,
   listAcceptedRequestsForUser,
   removeAcceptedContact,
   getAcceptedContactIds,
+  areUsersContacts,
 
   blockUser,
   getBlock,
