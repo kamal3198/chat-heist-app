@@ -16,6 +16,15 @@ class ApiService {
     return _authService.authHeaders();
   }
 
+  Future<Map<String, String>> _getHeadersWithForcedTokenRefresh() async {
+    final headers = await _authService.authHeaders();
+    final refreshedToken = await _authService.getFirebaseIdToken(forceRefresh: true);
+    if (refreshedToken != null && refreshedToken.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $refreshedToken';
+    }
+    return headers;
+  }
+
   Future<http.Response> _requestWithRetry(
     Future<http.Response> Function() request,
   ) async {
@@ -43,34 +52,66 @@ class ApiService {
 
   Future<http.Response> get(String url) async {
     final headers = await _getHeaders();
-    return _requestWithRetry(() => http.get(Uri.parse(url), headers: headers));
+    var response = await _requestWithRetry(() => http.get(Uri.parse(url), headers: headers));
+    if (response.statusCode == 401) {
+      final refreshedHeaders = await _getHeadersWithForcedTokenRefresh();
+      response = await _requestWithRetry(() => http.get(Uri.parse(url), headers: refreshedHeaders));
+    }
+    return response;
   }
 
   Future<http.Response> post(String url, Map<String, dynamic> body) async {
     final headers = await _getHeaders();
-    return _requestWithRetry(
+    var response = await _requestWithRetry(
       () => http.post(
         Uri.parse(url),
         headers: headers,
         body: jsonEncode(body),
       ),
     );
+    if (response.statusCode == 401) {
+      final refreshedHeaders = await _getHeadersWithForcedTokenRefresh();
+      response = await _requestWithRetry(
+        () => http.post(
+          Uri.parse(url),
+          headers: refreshedHeaders,
+          body: jsonEncode(body),
+        ),
+      );
+    }
+    return response;
   }
 
   Future<http.Response> put(String url, [Map<String, dynamic>? body]) async {
     final headers = await _getHeaders();
-    return _requestWithRetry(
+    var response = await _requestWithRetry(
       () => http.put(
         Uri.parse(url),
         headers: headers,
         body: body != null ? jsonEncode(body) : null,
       ),
     );
+    if (response.statusCode == 401) {
+      final refreshedHeaders = await _getHeadersWithForcedTokenRefresh();
+      response = await _requestWithRetry(
+        () => http.put(
+          Uri.parse(url),
+          headers: refreshedHeaders,
+          body: body != null ? jsonEncode(body) : null,
+        ),
+      );
+    }
+    return response;
   }
 
   Future<http.Response> delete(String url) async {
     final headers = await _getHeaders();
-    return _requestWithRetry(() => http.delete(Uri.parse(url), headers: headers));
+    var response = await _requestWithRetry(() => http.delete(Uri.parse(url), headers: headers));
+    if (response.statusCode == 401) {
+      final refreshedHeaders = await _getHeadersWithForcedTokenRefresh();
+      response = await _requestWithRetry(() => http.delete(Uri.parse(url), headers: refreshedHeaders));
+    }
+    return response;
   }
 
   Map<String, dynamic> parseResponse(http.Response response) {

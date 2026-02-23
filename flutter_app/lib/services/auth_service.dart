@@ -283,10 +283,14 @@ class AuthService {
   }
 
   Future<String?> getToken() async {
+    return getFirebaseIdToken(forceRefresh: true);
+  }
+
+  Future<String?> getFirebaseIdToken({bool forceRefresh = false}) async {
     try {
       final currentUser = _firebaseAuth.currentUser;
       if (currentUser == null) return null;
-      return await currentUser.getIdToken(true);
+      return await currentUser.getIdToken(forceRefresh);
     } catch (_) {
       return null;
     }
