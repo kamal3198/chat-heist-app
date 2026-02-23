@@ -13,11 +13,11 @@ class ApiService {
   ];
 
   Future<Map<String, String>> _getHeaders() async {
-    return _authService.authHeaders();
+    return _authService.requiredAuthHeaders();
   }
 
   Future<Map<String, String>> _getHeadersWithForcedTokenRefresh() async {
-    final headers = await _authService.authHeaders();
+    final headers = await _authService.requiredAuthHeaders();
     final refreshedToken = await _authService.getFirebaseIdToken(forceRefresh: true);
     if (refreshedToken != null && refreshedToken.isNotEmpty) {
       headers['Authorization'] = 'Bearer $refreshedToken';
@@ -52,8 +52,10 @@ class ApiService {
 
   Future<http.Response> get(String url) async {
     final headers = await _getHeaders();
+    var hasRetried = false;
     var response = await _requestWithRetry(() => http.get(Uri.parse(url), headers: headers));
-    if (response.statusCode == 401) {
+    if (response.statusCode == 401 && !hasRetried) {
+      hasRetried = true;
       final refreshedHeaders = await _getHeadersWithForcedTokenRefresh();
       response = await _requestWithRetry(() => http.get(Uri.parse(url), headers: refreshedHeaders));
     }
@@ -62,6 +64,7 @@ class ApiService {
 
   Future<http.Response> post(String url, Map<String, dynamic> body) async {
     final headers = await _getHeaders();
+    var hasRetried = false;
     var response = await _requestWithRetry(
       () => http.post(
         Uri.parse(url),
@@ -69,7 +72,8 @@ class ApiService {
         body: jsonEncode(body),
       ),
     );
-    if (response.statusCode == 401) {
+    if (response.statusCode == 401 && !hasRetried) {
+      hasRetried = true;
       final refreshedHeaders = await _getHeadersWithForcedTokenRefresh();
       response = await _requestWithRetry(
         () => http.post(
@@ -84,6 +88,7 @@ class ApiService {
 
   Future<http.Response> put(String url, [Map<String, dynamic>? body]) async {
     final headers = await _getHeaders();
+    var hasRetried = false;
     var response = await _requestWithRetry(
       () => http.put(
         Uri.parse(url),
@@ -91,7 +96,8 @@ class ApiService {
         body: body != null ? jsonEncode(body) : null,
       ),
     );
-    if (response.statusCode == 401) {
+    if (response.statusCode == 401 && !hasRetried) {
+      hasRetried = true;
       final refreshedHeaders = await _getHeadersWithForcedTokenRefresh();
       response = await _requestWithRetry(
         () => http.put(
@@ -106,8 +112,10 @@ class ApiService {
 
   Future<http.Response> delete(String url) async {
     final headers = await _getHeaders();
+    var hasRetried = false;
     var response = await _requestWithRetry(() => http.delete(Uri.parse(url), headers: headers));
-    if (response.statusCode == 401) {
+    if (response.statusCode == 401 && !hasRetried) {
+      hasRetried = true;
       final refreshedHeaders = await _getHeadersWithForcedTokenRefresh();
       response = await _requestWithRetry(() => http.delete(Uri.parse(url), headers: refreshedHeaders));
     }

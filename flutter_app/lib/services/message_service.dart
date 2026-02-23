@@ -56,26 +56,27 @@ class MessageService extends ApiService {
 
   Future<Map<String, dynamic>?> uploadFile(File file) async {
     try {
-      final headers = await _authService.authHeaders(includeContentType: false);
-      if (!headers.containsKey('Authorization')) return null;
+      final uri = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.uploadFile}');
+      var headers = await _authService.requiredAuthHeaders(includeContentType: false);
+      var hasRetried = false;
 
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.uploadFile}'),
+      var response = await _sendFileMultipart(
+        uri: uri,
+        headers: headers,
+        file: file,
       );
 
-      request.headers.addAll(headers);
+      if (response.statusCode == 401 && !hasRetried) {
+        hasRetried = true;
+        await _authService.getFirebaseIdToken(forceRefresh: true);
+        headers = await _authService.requiredAuthHeaders(includeContentType: false);
+        response = await _sendFileMultipart(
+          uri: uri,
+          headers: headers,
+          file: file,
+        );
+      }
 
-      final mimeType = lookupMimeType(file.path) ?? 'application/octet-stream';
-      final multipartFile = await http.MultipartFile.fromPath(
-        'file',
-        file.path,
-        contentType: MediaType.parse(mimeType),
-      );
-
-      request.files.add(multipartFile);
-
-      final response = await request.send();
       final responseData = await response.stream.bytesToString();
 
       if (response.statusCode == 200) {
@@ -100,27 +101,31 @@ class MessageService extends ApiService {
     String? mimeType,
   }) async {
     try {
-      final headers = await _authService.authHeaders(includeContentType: false);
-      if (!headers.containsKey('Authorization')) return null;
+      final uri = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.uploadFile}');
+      var headers = await _authService.requiredAuthHeaders(includeContentType: false);
+      var hasRetried = false;
 
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.uploadFile}'),
+      var response = await _sendBytesMultipart(
+        uri: uri,
+        headers: headers,
+        bytes: bytes,
+        fileName: fileName,
+        mimeType: mimeType,
       );
 
-      request.headers.addAll(headers);
-      final resolvedMime = mimeType ?? lookupMimeType(fileName) ?? 'application/octet-stream';
+      if (response.statusCode == 401 && !hasRetried) {
+        hasRetried = true;
+        await _authService.getFirebaseIdToken(forceRefresh: true);
+        headers = await _authService.requiredAuthHeaders(includeContentType: false);
+        response = await _sendBytesMultipart(
+          uri: uri,
+          headers: headers,
+          bytes: bytes,
+          fileName: fileName,
+          mimeType: mimeType,
+        );
+      }
 
-      request.files.add(
-        http.MultipartFile.fromBytes(
-          'file',
-          bytes,
-          filename: fileName,
-          contentType: MediaType.parse(resolvedMime),
-        ),
-      );
-
-      final response = await request.send();
       final responseData = await response.stream.bytesToString();
 
       if (response.statusCode == 200) {
@@ -138,5 +143,48 @@ class MessageService extends ApiService {
       print('Upload bytes error: $e');
       return null;
     }
+  }
+
+  Future<http.StreamedResponse> _sendFileMultipart({
+    required Uri uri,
+    required Map<String, String> headers,
+    required File file,
+  }) async {
+    final request = http.MultipartRequest('POST', uri);
+    request.headers.addAll(headers);
+
+    final mimeType = lookupMimeType(file.path) ?? 'application/octet-stream';
+    request.files.add(
+      await http.MultipartFile.fromPath(
+        'file',
+        file.path,
+        contentType: MediaType.parse(mimeType),
+      ),
+    );
+
+    return request.send();
+  }
+
+  Future<http.StreamedResponse> _sendBytesMultipart({
+    required Uri uri,
+    required Map<String, String> headers,
+    required List<int> bytes,
+    required String fileName,
+    String? mimeType,
+  }) async {
+    final request = http.MultipartRequest('POST', uri);
+    request.headers.addAll(headers);
+
+    final resolvedMime = mimeType ?? lookupMimeType(fileName) ?? 'application/octet-stream';
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        'file',
+        bytes,
+        filename: fileName,
+        contentType: MediaType.parse(resolvedMime),
+      ),
+    );
+
+    return request.send();
   }
 }

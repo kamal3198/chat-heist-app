@@ -153,7 +153,7 @@ class AuthService {
         email: email.trim(),
         password: password,
       );
-      final idToken = await credential.user?.getIdToken(true);
+      final idToken = await _getFreshIdTokenFromSignedInUser(credential.user);
       if (idToken == null) {
         return {
           'success': false,
@@ -185,7 +185,7 @@ class AuthService {
         await credential.user!.updateDisplayName(normalizedUsername);
       }
 
-      final idToken = await credential.user?.getIdToken(true);
+      final idToken = await _getFreshIdTokenFromSignedInUser(credential.user);
       if (idToken == null) {
         return {
           'success': false,
@@ -223,7 +223,7 @@ class AuthService {
       );
 
       final userCredential = await _firebaseAuth.signInWithCredential(credential);
-      final idToken = await userCredential.user?.getIdToken(true);
+      final idToken = await _getFreshIdTokenFromSignedInUser(userCredential.user);
 
       if (idToken == null) {
         return {
@@ -314,6 +314,15 @@ class AuthService {
     return headers;
   }
 
+  Future<Map<String, String>> requiredAuthHeaders({bool includeContentType = true}) async {
+    final headers = await authHeaders(includeContentType: includeContentType);
+    final authValue = headers['Authorization'];
+    if (authValue == null || authValue.trim().isEmpty || authValue.trim() == 'Bearer null') {
+      throw Exception('User not authenticated');
+    }
+    return headers;
+  }
+
   Future<bool> isLoggedIn() async {
     return _firebaseAuth.currentUser != null;
   }
@@ -331,28 +340,28 @@ class AuthService {
     File? avatarFile,
   }) async {
     try {
-      final headers = await authHeaders(includeContentType: false);
-      if (!headers.containsKey('Authorization')) {
-        return {
-          'success': false,
-          'error': 'Not authenticated',
-        };
-      }
-
-      final request = http.MultipartRequest(
-        'PUT',
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.currentProfile}'),
+      final uri = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.currentProfile}');
+      var headers = await requiredAuthHeaders(includeContentType: false);
+      var streamedResponse = await _sendProfileMultipart(
+        uri: uri,
+        headers: headers,
+        username: username,
+        about: about,
+        avatarFile: avatarFile,
       );
 
-      request.headers.addAll(headers);
-
-      if (username != null) request.fields['username'] = username;
-      if (about != null) request.fields['about'] = about;
-      if (avatarFile != null) {
-        request.files.add(await http.MultipartFile.fromPath('avatar', avatarFile.path));
+      if (streamedResponse.statusCode == 401) {
+        await getFirebaseIdToken(forceRefresh: true);
+        headers = await requiredAuthHeaders(includeContentType: false);
+        streamedResponse = await _sendProfileMultipart(
+          uri: uri,
+          headers: headers,
+          username: username,
+          about: about,
+          avatarFile: avatarFile,
+        );
       }
 
-      final streamedResponse = await request.send();
       final body = await streamedResponse.stream.bytesToString();
       final data = _safeJson(body);
 
@@ -374,6 +383,33 @@ class AuthService {
         'error': _connectionError(e),
       };
     }
+  }
+
+  Future<String?> _getFreshIdTokenFromSignedInUser(fb.User? user) async {
+    if (user == null) return null;
+    await user.reload();
+    final refreshedUser = _firebaseAuth.currentUser;
+    if (refreshedUser == null) return null;
+    return refreshedUser.getIdToken(true);
+  }
+
+  Future<http.StreamedResponse> _sendProfileMultipart({
+    required Uri uri,
+    required Map<String, String> headers,
+    String? username,
+    String? about,
+    File? avatarFile,
+  }) async {
+    final request = http.MultipartRequest('PUT', uri);
+    request.headers.addAll(headers);
+
+    if (username != null) request.fields['username'] = username;
+    if (about != null) request.fields['about'] = about;
+    if (avatarFile != null) {
+      request.files.add(await http.MultipartFile.fromPath('avatar', avatarFile.path));
+    }
+
+    return request.send();
   }
 }
 

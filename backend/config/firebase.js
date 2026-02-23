@@ -65,6 +65,8 @@ function getFirebaseApp() {
     throw new Error('Invalid Firebase service account payload.');
   }
 
+  console.info(`[firebase] Admin SDK projectId: ${serviceAccount.projectId}`);
+
   app = admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
     ...(env.firebaseStorageBucket ? { storageBucket: env.firebaseStorageBucket } : {}),

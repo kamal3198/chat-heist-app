@@ -31,6 +31,10 @@ app.use(
       if (isAllowedOrigin(origin)) return callback(null, true);
       return callback(new Error('Not allowed by CORS'));
     },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'x-session-id'],
+    exposedHeaders: ['Authorization'],
+    credentials: true,
   })
 );
 app.use(
