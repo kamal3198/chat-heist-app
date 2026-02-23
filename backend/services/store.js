@@ -10,6 +10,7 @@ const COLLECTIONS = {
   usernames: 'usernames',
   reservedUsernames: 'reserved_usernames',
   contactRequests: 'contact_requests',
+  chats: 'chats',
   blockedUsers: 'blocked_users',
   messages: 'messages',
   groups: 'groups',
@@ -517,74 +518,110 @@ async function setContactRequestStatus(requestId, status) {
   return getContactRequestById(requestId);
 }
 
-async function acceptRequestByUserIds(currentUserId, senderId) {
-  const currentId = String(currentUserId);
-  const sender = String(senderId);
-  const requestId = pairKey(currentId, sender);
-
-  const currentUserRef = db.collection(COLLECTIONS.users).doc(currentId);
-  const senderRef = db.collection(COLLECTIONS.users).doc(sender);
-  const requestRef = db.collection(COLLECTIONS.contactRequests).doc(requestId);
+async function acceptContactRequest(requestId, actingUserId = null) {
+  const requestRef = db.collection(COLLECTIONS.contactRequests).doc(String(requestId));
   let acceptedRequest = null;
 
   await db.runTransaction(async (transaction) => {
-    const [currentSnap, senderSnap, requestSnap] = await Promise.all([
-      transaction.get(currentUserRef),
-      transaction.get(senderRef),
-      transaction.get(requestRef),
-    ]);
-
-    if (!currentSnap.exists || !senderSnap.exists) {
-      const error = new Error('User not found');
+    const requestSnap = await transaction.get(requestRef);
+    if (!requestSnap.exists) {
+      const error = new Error('Contact request not found');
       error.statusCode = 404;
       throw error;
     }
 
-    const requestData = requestSnap.exists ? normalizeValue(requestSnap.data()) : null;
-    const requestReceiver = String(requestData?.receiver || '');
-    const requestSender = String(requestData?.sender || sender);
+    const requestData = normalizeValue(requestSnap.data()) || {};
+    const senderId = String(requestData.sender || '');
+    const receiverId = String(requestData.receiver || '');
+    const status = String(requestData.status || '');
 
-    if (requestSnap.exists && requestReceiver && requestReceiver !== currentId) {
+    if (!senderId || !receiverId) {
+      const error = new Error('Invalid contact request payload');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (actingUserId && String(actingUserId) !== receiverId) {
       const error = new Error('Unauthorized');
       error.statusCode = 403;
       throw error;
     }
 
-    transaction.set(
-      currentUserRef,
-      {
-        contacts: FieldValue.arrayUnion(sender),
-        requests: FieldValue.arrayRemove(sender),
-        updatedAt: now(),
-      },
-      { merge: true }
-    );
+    if (status === 'accepted') {
+      const error = new Error('Request already accepted');
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const senderRef = db.collection(COLLECTIONS.users).doc(senderId);
+    const receiverRef = db.collection(COLLECTIONS.users).doc(receiverId);
+    const chatId = pairKey(senderId, receiverId);
+    const chatRef = db.collection(COLLECTIONS.chats).doc(chatId);
+
+    const [senderSnap, receiverSnap, chatSnap] = await Promise.all([
+      transaction.get(senderRef),
+      transaction.get(receiverRef),
+      transaction.get(chatRef),
+    ]);
+
+    if (!senderSnap.exists || !receiverSnap.exists) {
+      const error = new Error('User not found');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    transaction.update(requestRef, {
+      status: 'accepted',
+      acceptedAt: FieldValue.serverTimestamp(),
+      updatedAt: now(),
+    });
 
     transaction.set(
       senderRef,
       {
-        contacts: FieldValue.arrayUnion(currentId),
+        contacts: FieldValue.arrayUnion(receiverId),
         updatedAt: now(),
       },
       { merge: true }
     );
 
-    if (requestSnap.exists) {
-      transaction.delete(requestRef);
+    transaction.set(
+      receiverRef,
+      {
+        contacts: FieldValue.arrayUnion(senderId),
+        requests: FieldValue.arrayRemove(senderId),
+        updatedAt: now(),
+      },
+      { merge: true }
+    );
+
+    if (!chatSnap.exists) {
+      transaction.set(chatRef, {
+        participants: [senderId, receiverId],
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: now(),
+        lastMessage: null,
+      });
     }
 
     acceptedRequest = {
-      _id: requestId,
-      id: requestId,
-      sender: requestSender,
-      receiver: currentId,
+      _id: String(requestRef.id),
+      id: String(requestRef.id),
+      sender: senderId,
+      receiver: receiverId,
       status: 'accepted',
-      createdAt: requestData?.createdAt || now(),
+      acceptedAt: new Date(),
+      createdAt: requestData.createdAt || now(),
       updatedAt: now(),
     };
   });
 
   return acceptedRequest;
+}
+
+async function acceptRequestByUserIds(currentUserId, senderId) {
+  const requestId = pairKey(currentUserId, senderId);
+  return acceptContactRequest(requestId, currentUserId);
 }
 
 async function listRequestsBySender(senderId, status = null) {
@@ -1062,6 +1099,7 @@ module.exports = {
   getContactRequestByPair,
   createContactRequest,
   setContactRequestStatus,
+  acceptContactRequest,
   acceptRequestByUserIds,
   listRequestsBySender,
   listRequestsByReceiver,

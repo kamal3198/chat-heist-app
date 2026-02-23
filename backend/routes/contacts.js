@@ -12,6 +12,8 @@ const {
   listRequestsByReceiver,
   listRequestsBySender,
   getContactRequestById,
+  setContactRequestStatus,
+  acceptContactRequest,
   acceptRequestByUserIds,
   removeAcceptedContact,
   populateByUserFields,
@@ -148,31 +150,33 @@ router.put('/request/:id/accept', auth, async (req, res) => {
 
 router.post('/accept-request', auth, async (req, res) => {
   try {
-    const { currentUserId, senderId } = req.body || {};
+    const { requestId } = req.body || {};
 
-    if (!currentUserId || !senderId) {
-      return res.status(400).json({ message: 'Missing required fields' });
+    if (!requestId) {
+      return res.status(400).json({ error: 'requestId is required' });
     }
 
-    if (String(currentUserId) !== String(req.userId)) {
-      return res.status(403).json({ message: 'Unauthorized' });
-    }
+    await acceptContactRequest(requestId, req.userId);
 
-    console.log('Current:', currentUserId);
-    console.log('Sender:', senderId);
-
-    await acceptRequestByUserIds(currentUserId, senderId);
-
-    return res.status(200).json({ message: 'Request accepted successfully' });
+    return res.status(200).json({
+      success: true,
+      message: 'Contact request accepted successfully',
+    });
   } catch (error) {
     console.error('Accept Request Error:', error);
+    if (error?.statusCode === 400) {
+      return res.status(400).json({ error: error.message });
+    }
     if (error?.statusCode === 404) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ error: error.message });
     }
     if (error?.statusCode === 403) {
-      return res.status(403).json({ message: 'Unauthorized' });
+      return res.status(403).json({ error: error.message });
     }
-    return res.status(500).json({ message: 'Internal server error' });
+    if (error?.statusCode === 409) {
+      return res.status(409).json({ error: error.message });
+    }
+    return res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
 

@@ -23,7 +23,9 @@ class AuthService {
   ];
 
   final fb.FirebaseAuth _firebaseAuth = fb.FirebaseAuth.instance;
-  final GoogleSignIn _googleSignIn = GoogleSignIn();
+  final GoogleSignIn _googleSignIn = GoogleSignIn(
+    clientId: '583401891840-ank18q50bn1t684k7c0qab4f3ugucfgk.apps.googleusercontent.com',
+  );
 
   String _connectionError(Object error) {
     if (error is SocketException || error is HttpException) {
