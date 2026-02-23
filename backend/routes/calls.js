@@ -16,21 +16,25 @@ router.get('/history', auth, async (req, res) => {
 
     return res.json({ calls: populated });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('CALLS_HISTORY ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
 router.get('/ice-servers', auth, async (req, res) => {
   try {
     const iceServers = [];
+    const stunUrls = Array.isArray(env.stunUrls) ? env.stunUrls : [];
+    const turnUrls = Array.isArray(env.turnUrls) ? env.turnUrls : [];
 
-    if (env.stunUrls.length) {
-      iceServers.push({ urls: env.stunUrls });
+    if (stunUrls.length) {
+      iceServers.push({ urls: stunUrls });
     }
 
-    if (env.turnUrls.length && env.turnUsername && env.turnCredential) {
+    if (turnUrls.length && env.turnUsername && env.turnCredential) {
       iceServers.push({
-        urls: env.turnUrls,
+        urls: turnUrls,
         username: env.turnUsername,
         credential: env.turnCredential,
       });
@@ -42,7 +46,9 @@ router.get('/ice-servers', auth, async (req, res) => {
 
     return res.json({ iceServers });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('CALLS_ICE_SERVERS ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 

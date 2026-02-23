@@ -36,7 +36,9 @@ router.get('/', auth, async (req, res) => {
 
     return res.json({ contacts });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('CONTACTS_LIST ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -86,7 +88,9 @@ router.post('/request', auth, async (req, res) => {
       request: populated,
     });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('CONTACTS_REQUEST_CREATE ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -96,7 +100,9 @@ router.get('/requests', auth, async (req, res) => {
     const populated = await populateByUserFields(requests, ['sender', 'receiver']);
     return res.json({ requests: populated });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('CONTACTS_REQUESTS_RECEIVED ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -106,7 +112,9 @@ router.get('/requests/sent', auth, async (req, res) => {
     const populated = await populateByUserFields(requests, ['sender', 'receiver']);
     return res.json({ requests: populated });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('CONTACTS_REQUESTS_SENT ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -144,7 +152,9 @@ router.put('/request/:id/accept', auth, async (req, res) => {
     if (error?.statusCode === 403) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
-    return res.status(500).json({ error: 'Server error' });
+    console.error('CONTACTS_REQUEST_ACCEPT ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -164,6 +174,7 @@ router.post('/accept-request', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Accept Request Error:', error);
+    console.error('FULL ERROR:', error);
     if (error?.statusCode === 400) {
       return res.status(400).json({ error: error.message });
     }
@@ -197,7 +208,9 @@ router.put('/request/:id/reject', auth, async (req, res) => {
     await setContactRequestStatus(requestId, 'rejected');
     return res.json({ message: 'Request rejected' });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('CONTACTS_REQUEST_REJECT ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -218,8 +231,9 @@ router.get('/:id', auth, async (req, res) => {
 
     return res.status(200).json(contacts);
   } catch (error) {
-    console.error('Fetch Contacts Error:', error);
-    return res.status(500).json({ message: 'Internal server error' });
+    console.error('CONTACTS_BY_ID ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
 
@@ -228,7 +242,9 @@ router.delete('/:userId', auth, async (req, res) => {
     await removeAcceptedContact(req.userId, req.params.userId);
     return res.json({ message: 'Contact removed' });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('CONTACTS_DELETE ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 

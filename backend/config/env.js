@@ -21,6 +21,16 @@ const env = {
   firebasePrivateKey: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
   firebaseStorageBucket: process.env.FIREBASE_STORAGE_BUCKET || '',
   firebaseWebApiKey: process.env.FIREBASE_WEB_API_KEY || '',
+  stunUrls: (process.env.STUN_URLS || '')
+    .split(',')
+    .map((url) => url.trim())
+    .filter(Boolean),
+  turnUrls: (process.env.TURN_URLS || '')
+    .split(',')
+    .map((url) => url.trim())
+    .filter(Boolean),
+  turnUsername: process.env.TURN_USERNAME || '',
+  turnCredential: process.env.TURN_CREDENTIAL || '',
   serverRequestTimeoutMs: Number(process.env.SERVER_REQUEST_TIMEOUT_MS || 60_000),
   serverHeadersTimeoutMs: Number(process.env.SERVER_HEADERS_TIMEOUT_MS || 65_000),
   serverKeepAliveTimeoutMs: Number(process.env.SERVER_KEEP_ALIVE_TIMEOUT_MS || 60_000),

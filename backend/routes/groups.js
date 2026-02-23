@@ -53,7 +53,9 @@ router.post('/', auth, async (req, res) => {
     const populated = await populateByUserFields(group, ['members', 'admins', 'createdBy']);
     return res.status(201).json({ group: populated });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('GROUPS_CREATE ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -63,7 +65,9 @@ router.get('/', auth, async (req, res) => {
     const populated = await populateByUserFields(groups, ['members', 'admins', 'createdBy']);
     return res.json({ groups: populated });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('GROUPS_LIST ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -92,7 +96,9 @@ router.post('/:id/members', auth, async (req, res) => {
     const populated = await populateByUserFields(updated, ['members', 'admins', 'createdBy']);
     return res.json({ group: populated });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('GROUPS_ADD_MEMBER ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -134,7 +140,9 @@ router.delete('/:id/members/:memberId', auth, async (req, res) => {
     const populated = await populateByUserFields(updated, ['members', 'admins', 'createdBy']);
     return res.json({ group: populated });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('GROUPS_REMOVE_MEMBER ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -167,7 +175,9 @@ router.post('/:id/admins/:memberId', auth, async (req, res) => {
     const populated = await populateByUserFields(updated, ['members', 'admins', 'createdBy']);
     return res.json({ group: populated });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('GROUPS_PROMOTE_ADMIN ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -198,7 +208,9 @@ router.delete('/:id/admins/:memberId', auth, async (req, res) => {
     const populated = await populateByUserFields(updated, ['members', 'admins', 'createdBy']);
     return res.json({ group: populated });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('GROUPS_DEMOTE_ADMIN ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 

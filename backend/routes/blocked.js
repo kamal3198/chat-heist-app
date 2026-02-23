@@ -21,7 +21,9 @@ router.get('/', auth, async (req, res) => {
 
     return res.json({ blockedUsers });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('BLOCKED_LIST ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -53,7 +55,9 @@ router.post('/:userId', auth, async (req, res) => {
 
     return res.status(201).json({ message: 'User blocked successfully' });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('BLOCKED_CREATE ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -66,7 +70,9 @@ router.delete('/:userId', auth, async (req, res) => {
 
     return res.json({ message: 'User unblocked successfully' });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('BLOCKED_DELETE ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
@@ -85,7 +91,9 @@ router.get('/check/:userId', auth, async (req, res) => {
       blockedBy,
     });
   } catch (error) {
-    return res.status(500).json({ error: 'Server error' });
+    console.error('BLOCKED_CHECK ERROR:', error);
+    console.error('FULL ERROR:', error);
+    return res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
