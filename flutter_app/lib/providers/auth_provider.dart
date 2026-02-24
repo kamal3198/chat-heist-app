@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'dart:io';
 import '../models/user.dart';
 import '../services/auth_service.dart';
+import '../services/notification_service.dart';
 import '../services/socket_service.dart';
 
 class AuthProvider with ChangeNotifier {
   final AuthService _authService = AuthService();
   final SocketService _socketService = SocketService();
+  final NotificationService _notificationService = NotificationService.instance;
 
   User? _currentUser;
   bool _isLoading = false;
@@ -27,6 +29,7 @@ class AuthProvider with ChangeNotifier {
         _currentUser = await _authService.getCurrentUser();
         if (_currentUser != null) {
           _socketService.connect(_currentUser!.id);
+          await _notificationService.initializeForUser(_currentUser!.id);
           return true;
         }
         _error = 'Saved session is invalid. Please login again.';
@@ -52,6 +55,7 @@ class AuthProvider with ChangeNotifier {
       if (result['success']) {
         _currentUser = result['user'];
         _socketService.connect(_currentUser!.id);
+        await _notificationService.initializeForUser(_currentUser!.id);
         _isLoading = false;
         notifyListeners();
         return true;
@@ -80,6 +84,7 @@ class AuthProvider with ChangeNotifier {
       if (result['success']) {
         _currentUser = result['user'];
         _socketService.connect(_currentUser!.id);
+        await _notificationService.initializeForUser(_currentUser!.id);
         _isLoading = false;
         notifyListeners();
         return true;
@@ -107,6 +112,7 @@ class AuthProvider with ChangeNotifier {
       if (result['success']) {
         _currentUser = result['user'];
         _socketService.connect(_currentUser!.id);
+        await _notificationService.initializeForUser(_currentUser!.id);
         _isLoading = false;
         notifyListeners();
         return true;
@@ -126,6 +132,7 @@ class AuthProvider with ChangeNotifier {
 
   Future<void> logout() async {
     _socketService.disconnect();
+    await _notificationService.clearForLogout();
     await _authService.logout();
     _currentUser = null;
     notifyListeners();

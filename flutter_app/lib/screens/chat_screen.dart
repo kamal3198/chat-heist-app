@@ -1,6 +1,7 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:io';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -8,13 +9,12 @@ import 'package:mime/mime.dart';
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
 
-import '../models/message.dart';
+import '../models/message_model.dart';
 import '../models/user.dart';
 import '../providers/auth_provider.dart';
 import '../providers/call_provider.dart';
-import '../providers/chat_settings_provider.dart';
-import '../providers/contact_provider.dart';
 import '../providers/message_provider.dart';
+import '../services/chat_service.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/typing_indicator.dart';
 import '../widgets/user_avatar.dart';
@@ -22,63 +22,72 @@ import 'contact_profile_screen.dart';
 import 'voice_call_screen.dart';
 
 class ChatScreen extends StatefulWidget {
-  final User contact;
+  const ChatScreen({super.key, required this.contact});
 
-  const ChatScreen({
-    super.key,
-    required this.contact,
-  });
+  final User contact;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  static const int _pageSize = 30;
+
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final ImagePicker _imagePicker = ImagePicker();
-  Timer? _typingTimer;
+  final ChatService _chatService = ChatService();
+  final Set<String> _selectedMessageIds = {};
 
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _liveMessagesSub;
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _liveMessageDocs = [];
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _olderMessageDocs = [];
+
+  Timer? _typingTimer;
   bool _isTyping = false;
   bool _showEmojiPicker = false;
-  bool _showStickerPicker = false;
-  final Set<String> _selectedMessageIds = {};
-  final List<String> _customStickers = [];
-  bool _initialized = false;
+  bool _isInitialLoading = true;
+  bool _isLoadingMore = false;
+  bool _hasMore = true;
+  String? _boundChatId;
 
   final List<String> _emojis = const [
-    '\u{1F970}', '\u{1F60D}', '\u{1F60A}', '\u{1F618}', '\u{1F496}', '\u{1F49E}',
-    '\u{1F44D}', '\u{1F44F}', '\u{1F64F}', '\u{1F525}', '\u{1F389}', '\u{1F31F}',
-    '\u{1F60E}', '\u{1F973}', '\u{1F63A}', '\u{1F49B}', '\u{1F49C}', '\u{1F499}',
-    '\u{1F917}', '\u{1F92D}', '\u{1F61A}', '\u{1F60B}', '\u{1F923}', '\u{1F92A}',
+    '\u{1F970}',
+    '\u{1F60D}',
+    '\u{1F60A}',
+    '\u{1F618}',
+    '\u{1F496}',
+    '\u{1F44D}',
+    '\u{1F44F}',
+    '\u{1F64F}',
+    '\u{1F525}',
+    '\u{1F389}',
+    '\u{1F31F}',
+    '\u{1F923}',
   ];
-
-  final List<String> _stickers = const [
-    '[sticker] (???????)?',
-    '[sticker] (?????)',
-    '[sticker] ?•?•?',
-    '[sticker] (????)?*:???',
-    '[sticker] (•`?•´)? ??',
-    '[sticker] (???)',
-    '[sticker] ¯\\_(?)_/¯',
-    '[sticker] (?\'`-\'´)?',
-  ];
-
-  String get _chatWallpaperKey => 'user:${widget.contact.id}';
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _initialized) return;
-      _initialized = true;
-      _loadMessages();
+      if (!mounted) return;
+      final provider = context.read<MessageProvider>();
+      provider.setActiveConversation(widget.contact.id);
+      provider.markMessagesAsRead(widget.contact.id);
     });
     _messageController.addListener(_onTextChanged);
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _bindLiveMessagesIfNeeded();
   }
 
   @override
   void dispose() {
+    _liveMessagesSub?.cancel();
     _typingTimer?.cancel();
     _messageController.dispose();
     _scrollController.dispose();
@@ -87,119 +96,118 @@ class _ChatScreenState extends State<ChatScreen> {
 
   bool get _selectionMode => _selectedMessageIds.isNotEmpty;
 
-  void _loadMessages() {
-    final messageProvider = Provider.of<MessageProvider>(context, listen: false);
-    messageProvider.setActiveConversation(widget.contact.id);
-    messageProvider.loadMessages(widget.contact.id);
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> get _combinedDocs {
+    final seen = <String>{};
+    final combined = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+    for (final doc in [..._liveMessageDocs, ..._olderMessageDocs]) {
+      if (seen.contains(doc.id)) continue;
+      seen.add(doc.id);
+      combined.add(doc);
+    }
+    return combined;
+  }
+
+  void _bindLiveMessagesIfNeeded() {
+    final me = context.read<AuthProvider>().currentUser;
+    if (me == null) return;
+
+    final chatId = _chatService.conversationId(me.id, widget.contact.id);
+    if (_boundChatId == chatId) return;
+
+    _boundChatId = chatId;
+    _liveMessagesSub?.cancel();
+
+    setState(() {
+      _isInitialLoading = true;
+      _isLoadingMore = false;
+      _hasMore = true;
+      _liveMessageDocs = [];
+      _olderMessageDocs = [];
+    });
+
+    _liveMessagesSub = _chatService
+        .messageSnapshots(chatId, limit: _pageSize)
+        .listen((snapshot) {
+      if (!mounted) return;
+      setState(() {
+        _liveMessageDocs = snapshot.docs;
+        _isInitialLoading = false;
+        if (_combinedDocs.length < _pageSize) {
+          _hasMore = false;
+        }
+      });
+
+      if (snapshot.docs.isNotEmpty) {
+        context.read<MessageProvider>().markMessagesAsRead(widget.contact.id);
+      }
+    }, onError: (_) {
+      if (!mounted) return;
+      setState(() {
+        _isInitialLoading = false;
+      });
+    });
+  }
+
+  Future<void> _loadMoreMessages() async {
+    if (_isLoadingMore || !_hasMore || _boundChatId == null) return;
+    final currentDocs = _combinedDocs;
+    if (currentDocs.isEmpty) return;
+
+    setState(() {
+      _isLoadingMore = true;
+    });
+
+    try {
+      final older = await _chatService.fetchOlderMessages(
+        chatId: _boundChatId!,
+        startAfter: currentDocs.last,
+        limit: _pageSize,
+      );
+
+      if (!mounted) return;
+
+      final existingIds = _combinedDocs.map((doc) => doc.id).toSet();
+      final newDocs = older.docs.where((doc) => !existingIds.contains(doc.id)).toList();
+
+      setState(() {
+        _olderMessageDocs = [..._olderMessageDocs, ...newDocs];
+        _isLoadingMore = false;
+        if (older.docs.length < _pageSize) {
+          _hasMore = false;
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingMore = false;
+      });
+    }
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 240) {
+      _loadMoreMessages();
+    }
   }
 
   void _onTextChanged() {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final messageProvider = Provider.of<MessageProvider>(context, listen: false);
-    final currentUser = authProvider.currentUser;
-    if (currentUser == null) return;
+    final me = context.read<AuthProvider>().currentUser;
+    if (me == null) return;
+    final provider = context.read<MessageProvider>();
 
     if (_messageController.text.isNotEmpty && !_isTyping) {
       _isTyping = true;
-      messageProvider.sendTyping(
-        currentUser.id,
-        widget.contact.id,
-        true,
-      );
+      provider.sendTyping(me.id, widget.contact.id, true);
     }
 
     _typingTimer?.cancel();
     _typingTimer = Timer(const Duration(seconds: 2), () {
       if (_isTyping) {
         _isTyping = false;
-        messageProvider.sendTyping(
-          currentUser.id,
-          widget.contact.id,
-          false,
-        );
+        provider.sendTyping(me.id, widget.contact.id, false);
       }
-    });
-  }
-
-  void _sendMessage() {
-    final text = _messageController.text.trim();
-    if (text.isEmpty) return;
-
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final messageProvider = Provider.of<MessageProvider>(context, listen: false);
-    final currentUser = authProvider.currentUser;
-    if (currentUser == null) return;
-
-    messageProvider.sendMessage(
-      senderId: currentUser.id,
-      receiverId: widget.contact.id,
-      text: text,
-    );
-
-    _messageController.clear();
-    _scrollToBottom();
-  }
-
-  void _sendSticker(String sticker) {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final messageProvider = Provider.of<MessageProvider>(context, listen: false);
-    final currentUser = authProvider.currentUser;
-    if (currentUser == null) return;
-
-    messageProvider.sendMessage(
-      senderId: currentUser.id,
-      receiverId: widget.contact.id,
-      text: sticker,
-    );
-    _scrollToBottom();
-  }
-
-  Future<void> _createSticker() async {
-    final controller = TextEditingController();
-    final sticker = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Create Sticker'),
-        content: TextField(
-          controller: controller,
-          maxLength: 40,
-          decoration: const InputDecoration(
-            hintText: 'Enter cute text or emoji art',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-
-    if (sticker != null && sticker.isNotEmpty) {
-      setState(() {
-        _customStickers.insert(0, '[sticker] $sticker');
-      });
-    }
-  }
-
-  void _toggleEmojiPicker() {
-    FocusScope.of(context).unfocus();
-    setState(() {
-      _showEmojiPicker = !_showEmojiPicker;
-      if (_showEmojiPicker) _showStickerPicker = false;
-    });
-  }
-
-  void _toggleStickerPicker() {
-    FocusScope.of(context).unfocus();
-    setState(() {
-      _showStickerPicker = !_showStickerPicker;
-      if (_showStickerPicker) _showEmojiPicker = false;
     });
   }
 
@@ -210,137 +218,75 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  void _toggleMessageSelection(Message message) {
-    if (message.id.isEmpty) return;
-    setState(() {
-      if (_selectedMessageIds.contains(message.id)) {
-        _selectedMessageIds.remove(message.id);
-      } else {
-        _selectedMessageIds.add(message.id);
-      }
-    });
+  void _sendMessage() {
+    final text = _messageController.text.trim();
+    final me = context.read<AuthProvider>().currentUser;
+    if (me == null || text.isEmpty) return;
+
+    context.read<MessageProvider>().sendMessage(
+          senderId: me.id,
+          receiverId: widget.contact.id,
+          text: text,
+          senderName: me.username,
+        );
+
+    _messageController.clear();
+    _scrollToLatest();
   }
 
-  Future<void> _deleteSelectedMessages() async {
-    if (_selectedMessageIds.isEmpty) return;
-
-    final shouldDelete = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Messages'),
-        content: Text('Delete ${_selectedMessageIds.length} selected messages?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+  void _scrollToLatest() {
+    if (!_scrollController.hasClients) return;
+    _scrollController.animateTo(
+      0,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
     );
-
-    if (shouldDelete != true) return;
-
-    final messageProvider = Provider.of<MessageProvider>(context, listen: false);
-    final success = await messageProvider.deleteMessages(
-      contactId: widget.contact.id,
-      messageIds: _selectedMessageIds.toList(),
-    );
-
-    if (!mounted) return;
-
-    if (success) {
-      setState(() {
-        _selectedMessageIds.clear();
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Messages deleted')),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(messageProvider.error ?? 'Delete failed')),
-      );
-    }
-  }
-
-  void _scrollToBottom() {
-    if (_scrollController.hasClients) {
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    }
   }
 
   Future<void> _pickImage(ImageSource source) async {
-    try {
-      final image = await _imagePicker.pickImage(source: source);
-      if (image == null) return;
+    final me = context.read<AuthProvider>().currentUser;
+    if (me == null) return;
 
-      final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      final messageProvider = Provider.of<MessageProvider>(context, listen: false);
-      final currentUser = authProvider.currentUser;
-      if (currentUser == null) return;
-      final bytes = await image.readAsBytes();
+    final image = await _imagePicker.pickImage(source: source);
+    if (image == null) return;
 
-      await messageProvider.sendFileBytesMessage(
-        senderId: currentUser.id,
-        receiverId: widget.contact.id,
-        bytes: bytes,
-        fileName: image.name,
-        mimeType: lookupMimeType(image.name),
-      );
-
-      _scrollToBottom();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to send image: $e')),
+    final bytes = await image.readAsBytes();
+    await context.read<MessageProvider>().sendFileBytesMessage(
+          senderId: me.id,
+          receiverId: widget.contact.id,
+          bytes: bytes,
+          fileName: image.name,
+          mimeType: lookupMimeType(image.name),
+          senderName: me.username,
         );
-      }
-    }
   }
 
   Future<void> _pickFile() async {
-    try {
-      final result = await FilePicker.platform.pickFiles(withData: true);
-      if (result == null || result.files.isEmpty) return;
+    final me = context.read<AuthProvider>().currentUser;
+    if (me == null) return;
 
-      final picked = result.files.first;
-      final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      final messageProvider = Provider.of<MessageProvider>(context, listen: false);
-      final currentUser = authProvider.currentUser;
-      if (currentUser == null) return;
+    final result = await FilePicker.platform.pickFiles(withData: true);
+    if (result == null || result.files.isEmpty) return;
 
-      if (picked.bytes != null) {
-        await messageProvider.sendFileBytesMessage(
-          senderId: currentUser.id,
-          receiverId: widget.contact.id,
-          bytes: picked.bytes!,
-          fileName: picked.name,
-          mimeType: lookupMimeType(picked.name),
-        );
-      } else if (picked.path != null) {
-        await messageProvider.sendFileMessage(
-          senderId: currentUser.id,
-          receiverId: widget.contact.id,
-          file: File(picked.path!),
-        );
-      } else {
-        throw Exception('Unsupported file data');
-      }
+    final picked = result.files.first;
+    final provider = context.read<MessageProvider>();
 
-      _scrollToBottom();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to send file: $e')),
-        );
-      }
+    if (picked.bytes != null) {
+      await provider.sendFileBytesMessage(
+        senderId: me.id,
+        receiverId: widget.contact.id,
+        bytes: picked.bytes!,
+        fileName: picked.name,
+        mimeType: lookupMimeType(picked.name),
+        senderName: me.username,
+      );
+    } else if (picked.path != null) {
+      await provider.sendFileMessage(
+        senderId: me.id,
+        receiverId: widget.contact.id,
+        file: File(picked.path!),
+        senderName: me.username,
+      );
     }
   }
 
@@ -352,7 +298,7 @@ class _ChatScreenState extends State<ChatScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.camera_alt),
+              leading: const Icon(Icons.camera_alt_outlined),
               title: const Text('Camera'),
               onTap: () {
                 Navigator.pop(context);
@@ -360,7 +306,7 @@ class _ChatScreenState extends State<ChatScreen> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.photo_library),
+              leading: const Icon(Icons.photo_library_outlined),
               title: const Text('Gallery'),
               onTap: () {
                 Navigator.pop(context);
@@ -368,7 +314,7 @@ class _ChatScreenState extends State<ChatScreen> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.insert_drive_file),
+              leading: const Icon(Icons.insert_drive_file_outlined),
               title: const Text('Document'),
               onTap: () {
                 Navigator.pop(context);
@@ -381,532 +327,306 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Future<void> _pickCustomChatWallpaper() async {
-    final image = await _imagePicker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 85,
-    );
-    if (image == null) return;
-    final bytes = await image.readAsBytes();
-    final settings = Provider.of<ChatSettingsProvider>(context, listen: false);
-    await settings.setChatCustomWallpaperBytes(_chatWallpaperKey, bytes);
-  }
-
-  void _showChatWallpaperPicker() {
-    final settings = Provider.of<ChatSettingsProvider>(context, listen: false);
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Chat Wallpaper',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  ...ChatSettingsProvider.availableWallpapers.map((wallpaper) {
-                    final selected =
-                        settings.wallpaperForChat(_chatWallpaperKey) == wallpaper;
-                    return InkWell(
-                      onTap: () async {
-                        if (wallpaper == 'custom') {
-                          await _pickCustomChatWallpaper();
-                        } else {
-                          await settings.setChatWallpaper(_chatWallpaperKey, wallpaper);
-                        }
-                        if (context.mounted) Navigator.pop(context);
-                      },
-                      borderRadius: BorderRadius.circular(12),
-                      child: Container(
-                        width: 86,
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: selected
-                                ? Theme.of(context).colorScheme.primary
-                                : Colors.transparent,
-                            width: 2,
-                          ),
-                          color:
-                              Theme.of(context).colorScheme.surfaceContainerHighest,
-                        ),
-                        child: Column(
-                          children: [
-                            Container(
-                              height: 50,
-                              decoration: settings
-                                  .wallpaperPreviewDecoration(wallpaper)
-                                  .copyWith(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                              child: wallpaper == 'custom'
-                                  ? const Center(
-                                      child: Icon(Icons.photo_library_outlined),
-                                    )
-                                  : null,
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              _wallpaperLabel(wallpaper),
-                              style: const TextStyle(fontSize: 11),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }),
-                  OutlinedButton.icon(
-                    onPressed: () async {
-                      await settings.clearChatWallpaper(_chatWallpaperKey);
-                      if (context.mounted) Navigator.pop(context);
-                    },
-                    icon: const Icon(Icons.restart_alt),
-                    label: const Text('Use global'),
-                  ),
-                ],
-              ),
-            ],
-          ),
+  Future<void> _deleteSelectedMessages(String contactId) async {
+    final me = context.read<AuthProvider>().currentUser;
+    if (me == null) return;
+    final chatId = _chatService.conversationId(me.id, contactId);
+    final chatSnap =
+        await FirebaseFirestore.instance.collection('chats').doc(chatId).get();
+    final retention =
+        ((chatSnap.data()?['retentionPolicy'] as Map?) ?? const <String, dynamic>{});
+    if (retention['enabled'] == true) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Message deletion is disabled by enterprise retention policy'),
         ),
-      ),
-    );
-  }
-
-  String _wallpaperLabel(String wallpaper) {
-    switch (wallpaper) {
-      case 'mint':
-        return 'Mint';
-      case 'ocean':
-        return 'Ocean';
-      case 'sunset':
-        return 'Sunset';
-      case 'dusk':
-        return 'Dusk';
-      case 'midnight':
-        return 'Midnight';
-      case 'custom':
-        return 'Custom';
-      default:
-        return 'Default';
+      );
+      return;
     }
-  }
 
-  void _showContactMenu() {
-    showModalBottomSheet(
+    final confirm = await showDialog<bool>(
       context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.person_outline),
-              title: const Text('View Profile'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ContactProfileScreen(user: widget.contact),
-                  ),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.wallpaper_outlined),
-              title: const Text('Chat Wallpaper'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                _showChatWallpaperPicker();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.block, color: Colors.red),
-              title: const Text('Block User'),
-              onTap: () async {
-                Navigator.pop(sheetContext);
-                final contactProvider = Provider.of<ContactProvider>(context, listen: false);
-                final success = await contactProvider.blockUser(widget.contact.id);
-                if (!mounted) return;
-                if (success) {
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('User blocked')),
-                  );
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(contactProvider.error ?? 'Failed to block user')),
-                  );
-                }
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.person_remove, color: Colors.orange),
-              title: const Text('Remove Contact'),
-              onTap: () async {
-                Navigator.pop(sheetContext);
-                final contactProvider = Provider.of<ContactProvider>(context, listen: false);
-                final success = await contactProvider.removeContact(widget.contact.id);
-                if (!mounted) return;
-                if (success) {
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Contact removed')),
-                  );
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(contactProvider.error ?? 'Failed to remove contact')),
-                  );
-                }
-              },
-            ),
-          ],
-        ),
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Messages'),
+        content: Text('Delete ${_selectedMessageIds.length} selected messages?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
       ),
     );
+
+    if (confirm != true) return;
+
+    final success = await context.read<MessageProvider>().deleteMessages(
+          contactId: contactId,
+          messageIds: _selectedMessageIds.toList(),
+        );
+
+    if (!mounted) return;
+    if (success) {
+      setState(() => _selectedMessageIds.clear());
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final authProvider = Provider.of<AuthProvider>(context);
-    final currentUserId = authProvider.currentUser?.id ?? '';
+    final me = context.watch<AuthProvider>().currentUser;
+    final currentUserId = me?.id ?? '';
+    final combinedDocs = _combinedDocs;
+    final messages = combinedDocs
+        .map(MessageModel.fromDoc)
+        .where((message) => !message.isDeletedFor(currentUserId))
+        .toList();
 
     return Scaffold(
       appBar: AppBar(
+        titleSpacing: 0,
         leading: _selectionMode
             ? IconButton(
                 icon: const Icon(Icons.close),
-                onPressed: () {
-                  setState(() {
-                    _selectedMessageIds.clear();
-                  });
-                },
+                onPressed: () => setState(() => _selectedMessageIds.clear()),
               )
             : null,
-        titleSpacing: 0,
         title: _selectionMode
             ? Text('${_selectedMessageIds.length} selected')
-            : InkWell(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ContactProfileScreen(user: widget.contact),
-                    ),
-                  );
-                },
-                child: Row(
-                  children: [
-                    UserAvatar(
-                      user: widget.contact,
-                      radius: 20,
-                      showOnlineIndicator: true,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.contact.username,
-                            style: const TextStyle(fontSize: 16),
-                          ),
-                          Text(
-                            widget.contact.isOnline
-                                ? 'Online'
-                                : widget.contact.lastSeen != null
-                                    ? 'Last seen ${timeago.format(widget.contact.lastSeen!)}'
-                                    : 'Offline',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.normal,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-        actions: [
-          if (_selectionMode)
-            IconButton(
-              icon: const Icon(Icons.delete_outline),
-              onPressed: _deleteSelectedMessages,
-            )
-          else ...[
-            IconButton(
-              icon: const Icon(Icons.call),
-              onPressed: () async {
-                final callProvider =
-                    Provider.of<CallProvider>(context, listen: false);
-                final started = await callProvider.startCall(
-                  context: context,
-                  participantIds: [widget.contact.id],
-                );
-                if (!mounted) return;
-                if (started != null) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => VoiceCallScreen(
-                        title: widget.contact.username,
-                        isGroup: false,
-                        participants: [widget.contact],
-                        onEndCall: () => callProvider.endCall(),
-                      ),
-                    ),
-                  );
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        callProvider.error ?? 'Unable to start call',
-                      ),
-                    ),
-                  );
-                }
-              },
-            ),
-            IconButton(
-              icon: const Icon(Icons.more_vert),
-              onPressed: _showContactMenu,
-            ),
-          ]
-        ],
-      ),
-      body: Consumer<ChatSettingsProvider>(
-        builder: (context, chatSettings, _) => Container(
-          decoration: chatSettings.buildWallpaperDecoration(
-            Theme.of(context),
-            chatKey: _chatWallpaperKey,
-          ),
-          child: Column(
-            children: [
-          Expanded(
-            child: Consumer<MessageProvider>(
-              builder: (context, messageProvider, child) {
-                final messages = messageProvider.getConversation(widget.contact.id);
+            : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                stream: _chatService.userSnapshot(widget.contact.id),
+                builder: (context, snapshot) {
+                  final data = snapshot.data?.data() ?? {};
+                  final isOnline = data['isOnline'] == true;
+                  final ts = data['lastSeen'];
+                  final lastSeen = ts is Timestamp ? ts.toDate() : widget.contact.lastSeen;
 
-                if (messageProvider.isLoading && messages.isEmpty) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                if (messages.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                  return InkWell(
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ContactProfileScreen(user: widget.contact),
+                      ),
+                    ),
+                    child: Row(
                       children: [
-                        Icon(
-                          Icons.chat_bubble_outline,
-                          size: 64,
-                          color: Colors.grey[400],
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'No messages yet',
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: Colors.grey[600],
+                        UserAvatar(
+                          user: widget.contact.copyWith(
+                            isOnline: isOnline,
+                            lastSeen: lastSeen,
                           ),
+                          radius: 20,
+                          showOnlineIndicator: true,
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Start a conversation with ${widget.contact.username}',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey[500],
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(widget.contact.username),
+                              Text(
+                                isOnline
+                                    ? 'Online'
+                                    : lastSeen != null
+                                        ? 'Last seen ${timeago.format(lastSeen)}'
+                                        : 'Offline',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ],
                           ),
                         ),
                       ],
                     ),
                   );
-                }
-
-                return ListView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.all(8),
-                  itemCount: messages.length,
-                  itemBuilder: (context, index) {
-                    final message = messages[index];
-                    final isSentByMe = message.sender.id == currentUserId;
-                    return MessageBubble(
-                      message: message,
-                      isSentByMe: isSentByMe,
-                      isSelected: _selectedMessageIds.contains(message.id),
-                      onLongPress: () => _toggleMessageSelection(message),
-                      onTap: _selectionMode ? () => _toggleMessageSelection(message) : null,
-                    );
-                  },
+                },
+              ),
+        actions: [
+          if (_selectionMode)
+            IconButton(
+              onPressed: () => _deleteSelectedMessages(widget.contact.id),
+              icon: const Icon(Icons.delete_outline),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.call_outlined),
+              onPressed: () async {
+                final callProvider = context.read<CallProvider>();
+                final started = await callProvider.startCall(
+                  context: context,
+                  participantIds: [widget.contact.id],
+                );
+                if (!mounted || started == null) return;
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => VoiceCallScreen(
+                      title: widget.contact.username,
+                      isGroup: false,
+                      participants: [widget.contact],
+                      onEndCall: () => callProvider.endCall(),
+                    ),
+                  ),
                 );
               },
             ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: _isInitialLoading
+                ? const Center(child: CircularProgressIndicator())
+                : messages.isEmpty
+                    ? const Center(child: Text('No messages yet'))
+                    : ListView.builder(
+                        controller: _scrollController,
+                        reverse: true,
+                        keyboardDismissBehavior:
+                            ScrollViewKeyboardDismissBehavior.onDrag,
+                        itemCount: messages.length + (_isLoadingMore ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (_isLoadingMore && index == messages.length) {
+                            return const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 12),
+                              child: Center(child: CircularProgressIndicator()),
+                            );
+                          }
+
+                          final message = messages[index];
+                          return MessageBubble(
+                            message: message,
+                            isSentByMe: message.senderId == currentUserId,
+                            isSelected: _selectedMessageIds.contains(message.id),
+                            onLongPress: () {
+                              setState(() {
+                                if (_selectedMessageIds.contains(message.id)) {
+                                  _selectedMessageIds.remove(message.id);
+                                } else {
+                                  _selectedMessageIds.add(message.id);
+                                }
+                              });
+                            },
+                            onTap: _selectionMode
+                                ? () {
+                                    setState(() {
+                                      if (_selectedMessageIds.contains(message.id)) {
+                                        _selectedMessageIds.remove(message.id);
+                                      } else {
+                                        _selectedMessageIds.add(message.id);
+                                      }
+                                    });
+                                  }
+                                : null,
+                          );
+                        },
+                      ),
           ),
           Consumer<MessageProvider>(
-            builder: (context, messageProvider, child) {
-              if (messageProvider.isTyping(widget.contact.id)) {
-                return TypingIndicator(username: widget.contact.username);
-              }
-              return const SizedBox.shrink();
-            },
+            builder: (context, provider, _) => provider.isTyping(widget.contact.id)
+                ? TypingIndicator(username: widget.contact.username)
+                : const SizedBox.shrink(),
           ),
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardColor,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
-                  blurRadius: 4,
-                  offset: const Offset(0, -2),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                IconButton(
-                  icon: Icon(
-                    _showEmojiPicker ? Icons.keyboard_alt_outlined : Icons.emoji_emotions_outlined,
-                  ),
-                  onPressed: _toggleEmojiPicker,
-                ),
-                IconButton(
-                  icon: Icon(
-                    _showStickerPicker ? Icons.keyboard_alt_outlined : Icons.auto_awesome,
-                  ),
-                  onPressed: _toggleStickerPicker,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.attach_file),
-                  onPressed: _showAttachmentOptions,
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    onTap: () {
-                      if (_showEmojiPicker || _showStickerPicker) {
-                        setState(() {
-                          _showEmojiPicker = false;
-                          _showStickerPicker = false;
-                        });
-                      }
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  IconButton(
+                    onPressed: () {
+                      FocusScope.of(context).unfocus();
+                      setState(() => _showEmojiPicker = !_showEmojiPicker);
                     },
-                    decoration: InputDecoration(
-                      hintText: 'Type a message',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide.none,
-                      ),
-                      filled: true,
-                      fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
+                    icon: Icon(
+                      _showEmojiPicker
+                          ? Icons.keyboard_alt_outlined
+                          : Icons.emoji_emotions_outlined,
                     ),
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _sendMessage(),
-                    maxLines: null,
                   ),
-                ),
-                const SizedBox(width: 8),
-                CircleAvatar(
-                  backgroundColor: Theme.of(context).colorScheme.primary,
-                  child: IconButton(
-                    icon: const Icon(Icons.send, color: Colors.white),
-                    onPressed: _sendMessage,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            height: _showEmojiPicker ? 220 : 0,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: _showEmojiPicker
-                ? GridView.builder(
-                    itemCount: _emojis.length,
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 8,
-                      childAspectRatio: 1.1,
-                    ),
-                    itemBuilder: (context, index) {
-                      return InkWell(
-                        onTap: () => _appendEmoji(_emojis[index]),
-                        child: Center(
-                          child: Text(
-                            _emojis[index],
-                            style: const TextStyle(fontSize: 24),
-                          ),
-                        ),
-                      );
-                    },
-                  )
-                : null,
-          ),
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            height: _showStickerPicker ? 220 : 0,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: _showStickerPicker
-                ? Column(
-                    children: [
-                      Row(
-                        children: [
-                          const Text(
-                            'Stickers',
-                            style: TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          const Spacer(),
-                          TextButton.icon(
-                            onPressed: _createSticker,
-                            icon: const Icon(Icons.add_circle_outline),
-                            label: const Text('Create'),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surface,
+                        borderRadius: BorderRadius.circular(28),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x12000000),
+                            blurRadius: 10,
+                            offset: Offset(0, 4),
                           ),
                         ],
                       ),
-                      Expanded(
-                        child: GridView.builder(
-                          itemCount: _customStickers.length + _stickers.length,
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 2,
-                            childAspectRatio: 2.6,
-                            crossAxisSpacing: 8,
-                            mainAxisSpacing: 8,
-                          ),
-                          itemBuilder: (context, index) {
-                            final sticker = index < _customStickers.length
-                                ? _customStickers[index]
-                                : _stickers[index - _customStickers.length];
-                            return OutlinedButton(
-                              onPressed: () => _sendSticker(sticker),
-                              child: Text(
-                                sticker.replaceFirst('[sticker]', '').trim(),
-                                maxLines: 1,
-                                textAlign: TextAlign.center,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _messageController,
+                              minLines: 1,
+                              maxLines: 5,
+                              textInputAction: TextInputAction.send,
+                              onSubmitted: (_) => _sendMessage(),
+                              decoration: const InputDecoration(
+                                hintText: 'Type a message',
+                                border: InputBorder.none,
                               ),
-                            );
-                          },
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: _showAttachmentOptions,
+                            icon: const Icon(Icons.attach_file),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF25D366), Color(0xFF128C7E)],
+                      ),
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: IconButton(
+                      onPressed: _sendMessage,
+                      icon: const Icon(Icons.send, color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            height: _showEmojiPicker ? 200 : 0,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: _showEmojiPicker
+                ? GridView.builder(
+                    itemCount: _emojis.length,
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 8,
+                    ),
+                    itemBuilder: (context, index) => InkWell(
+                      onTap: () => _appendEmoji(_emojis[index]),
+                      child: Center(
+                        child: Text(
+                          _emojis[index],
+                          style: const TextStyle(fontSize: 24),
                         ),
                       ),
-                    ],
+                    ),
                   )
                 : null,
           ),
         ],
       ),
-        ),
-      ),
     );
   }
 }
-

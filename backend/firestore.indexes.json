@@ -47,7 +47,7 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "participants", "arrayConfig": "CONTAINS" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        { "fieldPath": "lastTimestamp", "order": "DESCENDING" }
       ]
     }
   ],

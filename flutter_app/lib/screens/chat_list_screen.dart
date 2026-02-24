@@ -1,10 +1,14 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
-import 'package:intl/intl.dart';
+
+import '../models/chat_model.dart';
+import '../models/user.dart';
 import '../providers/auth_provider.dart';
 import '../providers/contact_provider.dart';
-import '../providers/message_provider.dart';
+import '../services/chat_service.dart';
 import '../widgets/user_avatar.dart';
 import 'chat_screen.dart';
 
@@ -16,6 +20,7 @@ class ChatListScreen extends StatefulWidget {
 }
 
 class _ChatListScreenState extends State<ChatListScreen> {
+  final ChatService _chatService = ChatService();
   bool _initialized = false;
 
   @override
@@ -29,47 +34,58 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 
   Future<void> _loadData() async {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final contactProvider = Provider.of<ContactProvider>(context, listen: false);
-    
+    final authProvider = context.read<AuthProvider>();
+    final contactProvider = context.read<ContactProvider>();
     if (authProvider.currentUser != null) {
       await contactProvider.loadContacts();
     }
   }
 
-  Future<void> _refresh() async {
-    await _loadData();
+  Future<void> _refresh() => _loadData();
+
+  User _resolveContact(
+    String contactId,
+    List<User> contacts,
+    DateTime now,
+  ) {
+    for (final contact in contacts) {
+      if (contact.id == contactId) return contact;
+    }
+    return User(
+      id: contactId,
+      username: 'User',
+      avatar: '',
+      createdAt: now,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final authProvider = Provider.of<AuthProvider>(context);
-    final currentUserId = authProvider.currentUser?.id ?? '';
+    final authProvider = context.watch<AuthProvider>();
+    final contactProvider = context.watch<ContactProvider>();
+    final currentUser = authProvider.currentUser;
+    final currentUserId = currentUser?.id ?? '';
+    final now = DateTime.now();
+
+    if (currentUserId.isEmpty) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
 
     return Scaffold(
-      body: Consumer2<ContactProvider, MessageProvider>(
-        builder: (context, contactProvider, messageProvider, child) {
-          if (contactProvider.isLoading && contactProvider.contacts.isEmpty) {
+      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: _chatService.chatSnapshots(currentUserId),
+        builder: (context, chatsSnapshot) {
+          if (chatsSnapshot.connectionState == ConnectionState.waiting &&
+              !chatsSnapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          final contacts = contactProvider.contacts;
-          
-          // Filter contacts that have messages
-          final contactsWithMessages = contacts.where((contact) {
-            final lastMessage = messageProvider.getLastMessage(contact.id);
-            return lastMessage != null;
-          }).toList();
+          final chatDocs = chatsSnapshot.data?.docs ?? const [];
+          final chats = chatDocs.map(ChatModel.fromDoc).toList();
 
-          // Sort by last message time
-          contactsWithMessages.sort((a, b) {
-            final aMsg = messageProvider.getLastMessage(a.id);
-            final bMsg = messageProvider.getLastMessage(b.id);
-            if (aMsg == null || bMsg == null) return 0;
-            return bMsg.timestamp.compareTo(aMsg.timestamp);
-          });
-
-          if (contactsWithMessages.isEmpty) {
+          if (chats.isEmpty) {
             return RefreshIndicator(
               onRefresh: _refresh,
               child: Center(
@@ -100,7 +116,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                           color: Colors.grey[500],
                         ),
                       ),
-                      const SizedBox(height: 200), // For pull to refresh
+                      const SizedBox(height: 180),
                     ],
                   ),
                 ),
@@ -111,107 +127,104 @@ class _ChatListScreenState extends State<ChatListScreen> {
           return RefreshIndicator(
             onRefresh: _refresh,
             child: ListView.builder(
-              itemCount: contactsWithMessages.length,
+              itemCount: chats.length,
               itemBuilder: (context, index) {
-                final contact = contactsWithMessages[index];
-                final lastMessage = messageProvider.getLastMessage(contact.id);
-                final unreadCount = messageProvider.getUnreadCount(
-                  contact.id,
-                  currentUserId,
-                );
+                final chat = chats[index];
+                final contactId = chat.participants
+                    .where((id) => id != currentUserId)
+                    .firstOrNull;
 
-                return ListTile(
-                  leading: UserAvatar(
-                    user: contact,
-                    radius: 28,
-                    showOnlineIndicator: true,
+                if (contactId == null) return const SizedBox.shrink();
+                final contact = _resolveContact(contactId, contactProvider.contacts, now);
+                final chatId = _chatService.conversationId(currentUserId, contactId);
+
+                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: _chatService.unseenMessageSnapshots(
+                    chatId: chatId,
+                    currentUserId: currentUserId,
                   ),
-                  title: Text(
-                    contact.username,
-                    style: TextStyle(
-                      fontWeight: unreadCount > 0 
-                          ? FontWeight.bold 
-                          : FontWeight.normal,
-                    ),
-                  ),
-                  subtitle: lastMessage != null
-                      ? Row(
-                          children: [
-                            if (lastMessage.sender.id == currentUserId) ...[
-                              Icon(
-                                _getStatusIcon(lastMessage.status),
-                                size: 16,
-                                color: lastMessage.status == 'read'
-                                    ? Theme.of(context).colorScheme.primary
-                                    : Colors.grey,
+                  builder: (context, unreadSnapshot) {
+                    final unreadCount = unreadSnapshot.data?.docs.length ?? 0;
+                    final hasUnread = unreadCount > 0;
+                    final isLastFromMe = chat.lastSenderId == currentUserId;
+
+                    return ListTile(
+                      leading: UserAvatar(
+                        user: contact,
+                        radius: 28,
+                        showOnlineIndicator: true,
+                      ),
+                      title: Text(
+                        contact.username,
+                        style: TextStyle(
+                          fontWeight: hasUnread ? FontWeight.bold : FontWeight.w500,
+                        ),
+                      ),
+                      subtitle: Row(
+                        children: [
+                          if (isLastFromMe)
+                            Icon(
+                              Icons.done_all,
+                              size: 16,
+                              color: hasUnread
+                                  ? Theme.of(context).colorScheme.primary
+                                  : Colors.grey,
+                            ),
+                          if (isLastFromMe) const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              chat.lastMessage.isEmpty ? 'Start chatting' : chat.lastMessage,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontWeight: hasUnread ? FontWeight.w700 : FontWeight.w400,
                               ),
-                              const SizedBox(width: 4),
-                            ],
-                            Expanded(
+                            ),
+                          ),
+                        ],
+                      ),
+                      trailing: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            _formatMessageTime(chat.lastTimestamp),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: hasUnread
+                                  ? Theme.of(context).colorScheme.primary
+                                  : Colors.grey,
+                              fontWeight: hasUnread ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                          if (hasUnread) ...[
+                            const SizedBox(height: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.primary,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
                               child: Text(
-                                lastMessage.hasFile
-                                    ? lastMessage.isImage
-                                        ? 'Photo'
-                                        : 'File: ${lastMessage.fileName}'
-                                    : lastMessage.text,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontWeight: unreadCount > 0
-                                      ? FontWeight.bold
-                                      : FontWeight.normal,
+                                unreadCount > 99 ? '99+' : unreadCount.toString(),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
                                 ),
                               ),
                             ),
                           ],
-                        )
-                      : null,
-                  trailing: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      if (lastMessage != null)
-                        Text(
-                          _formatMessageTime(lastMessage.timestamp),
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: unreadCount > 0
-                                ? Theme.of(context).colorScheme.primary
-                                : Colors.grey,
-                            fontWeight: unreadCount > 0
-                                ? FontWeight.bold
-                                : FontWeight.normal,
-                          ),
-                        ),
-                      if (unreadCount > 0) ...[
-                        const SizedBox(height: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.primary,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(
-                            unreadCount > 99 ? '99+' : unreadCount.toString(),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ChatScreen(contact: contact),
+                        ],
                       ),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ChatScreen(contact: contact),
+                          ),
+                        );
+                      },
                     );
                   },
                 );
@@ -223,25 +236,12 @@ class _ChatListScreenState extends State<ChatListScreen> {
     );
   }
 
-  IconData _getStatusIcon(String status) {
-    switch (status) {
-      case 'sent':
-        return Icons.check;
-      case 'delivered':
-        return Icons.done_all;
-      case 'read':
-        return Icons.done_all;
-      default:
-        return Icons.schedule;
-    }
-  }
-
-  String _formatMessageTime(DateTime timestamp) {
+  String _formatMessageTime(DateTime? timestamp) {
+    if (timestamp == null) return '';
     final local = timestamp.toLocal();
     final now = DateTime.now();
-    final isToday = local.year == now.year &&
-        local.month == now.month &&
-        local.day == now.day;
+    final isToday =
+        local.year == now.year && local.month == now.month && local.day == now.day;
 
     if (isToday) {
       return DateFormat('h:mm a').format(local);
@@ -254,4 +254,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
     return DateFormat('dd/MM/yy').format(local);
   }
+}
+
+extension<T> on Iterable<T> {
+  T? get firstOrNull => isEmpty ? null : first;
 }

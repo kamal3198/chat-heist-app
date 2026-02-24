@@ -267,7 +267,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await groupProvider.loadGroups();
     if (!mounted) return;
     callProvider.initialize(userId);
-    messageProvider.initialize(userId);
+    await messageProvider.initialize(currentUser);
   }
 
   void _handleIncomingCallDialog() {

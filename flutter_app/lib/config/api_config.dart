@@ -4,6 +4,9 @@ class ApiConfig {
   static const String _appEnv = String.fromEnvironment('APP_ENV', defaultValue: 'prod');
   static const String _envBaseUrl =
       String.fromEnvironment('API_BASE_URL', defaultValue: 'https://chat-heist-app.onrender.com');
+  static const String fcmServerKey =
+      String.fromEnvironment('FCM_SERVER_KEY', defaultValue: '');
+  static const String fcmLegacySendEndpoint = 'https://fcm.googleapis.com/fcm/send';
 
   static String get baseUrl {
     final normalizedEnvUrl = _normalize(_envBaseUrl);

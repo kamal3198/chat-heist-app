@@ -4,27 +4,6 @@ service cloud.firestore {
     function isSignedIn() {
       return request.auth != null;
     }
-    
-    function isSelf(userId) {
-      return isSignedIn() && request.auth.uid == userId;
-    }
-
-    function isParticipant(participants) {
-      return isSignedIn() && request.auth.uid in participants;
-    }
-
-    function canAccessChat(chatId) {
-      return isParticipant(get(/databases/$(database)/documents/chats/$(chatId)).data.participants);
-    }
-
-    function canWriteChat(chatId) {
-      return isSignedIn() &&
-        request.auth.uid in getAfter(/databases/$(database)/documents/chats/$(chatId)).data.participants;
-    }
-
-    function retentionEnabled(chatId) {
-      return get(/databases/$(database)/documents/chats/$(chatId)).data.retentionPolicy.enabled == true;
-    }
 
     function immutableUsernameFields() {
       return request.resource.data.username_search == resource.data.username_search &&
@@ -35,56 +14,11 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      // Only the authenticated owner can read/write their own user document.
-      allow get: if isSelf(userId);
+      allow get: if isSignedIn();
       allow list: if false;
-      allow create: if isSelf(userId);
-      allow update: if isSelf(userId) && immutableUsernameFields();
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && request.auth.uid == userId && immutableUsernameFields();
       allow delete: if false;
-    }
-
-    match /chats/{chatId} {
-      allow get, list: if isParticipant(resource.data.participants);
-      allow create: if isSignedIn() &&
-        request.resource.data.participants is list &&
-        request.resource.data.participants.size() == 2 &&
-        isParticipant(request.resource.data.participants);
-      allow update: if isParticipant(resource.data.participants) &&
-        request.resource.data.participants == resource.data.participants;
-      allow delete: if false;
-
-      match /messages/{messageId} {
-        allow get, list: if canAccessChat(chatId);
-        allow create: if canWriteChat(chatId) &&
-          request.auth.uid == request.resource.data.senderId &&
-          request.resource.data.receiverId in
-            getAfter(/databases/$(database)/documents/chats/$(chatId)).data.participants &&
-          request.resource.data.deliveryStatus == 'sent';
-        allow update: if canWriteChat(chatId) && (
-          // Receiver can only move delivery state from sent -> seen.
-          (
-            request.auth.uid == resource.data.receiverId &&
-            request.resource.data.diff(resource.data).changedKeys().hasOnly([
-              'deliveryStatus', 'seenAt'
-            ]) &&
-            resource.data.deliveryStatus == 'sent' &&
-            request.resource.data.deliveryStatus == 'seen'
-          ) ||
-          // Participant can soft-delete only for self when retention is disabled
-          (
-            !retentionEnabled(chatId) &&
-            request.resource.data.diff(resource.data).changedKeys().hasOnly(['deletedFor']) &&
-            request.resource.data.deletedFor.hasAll(resource.data.deletedFor) &&
-            request.resource.data.deletedFor.size() <= resource.data.deletedFor.size() + 1 &&
-            request.auth.uid in request.resource.data.deletedFor &&
-            (
-              request.resource.data.deletedFor.size() == resource.data.deletedFor.size() ||
-              !(request.auth.uid in resource.data.deletedFor)
-            )
-          )
-        );
-        allow delete: if false;
-      }
     }
 
     function validUserPublicSearchQuery() {
@@ -128,7 +62,11 @@ service cloud.firestore {
     }
 
     match /messages/{messageId} {
-      allow read, write: if false;
+      allow read, update, delete: if isSignedIn() && (
+        request.auth.uid == resource.data.sender ||
+        request.auth.uid == resource.data.receiver
+      );
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.sender;
     }
 
     match /groups/{groupId} {
