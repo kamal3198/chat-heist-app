@@ -597,7 +597,7 @@ async function acceptContactRequest(requestId, actingUserId = null) {
 
     if (!chatSnap.exists) {
       transaction.set(chatRef, {
-        participants: [senderId, receiverId],
+        participants: [senderId, receiverId].sort(),
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: now(),
         lastMessage: null,
@@ -752,57 +752,115 @@ async function unblockUser(blockerId, blockedId) {
   return true;
 }
 
-function serializeMessageInput(payload) {
+function normalizeDeliveryStatus(status) {
+  return status === 'read' || status === 'seen' ? 'seen' : 'sent';
+}
+
+function canonicalMessageResponse(id, data) {
+  const row = withIds(id, data);
   return {
-    sender: String(payload.sender),
-    receiver: String(payload.receiver),
+    ...row,
+    sender: row.senderId,
+    receiver: row.receiverId,
+    message: row.text,
+    status: row.deliveryStatus === 'seen' ? 'read' : row.deliveryStatus,
+  };
+}
+
+function serializeMessageInput(payload) {
+  const senderId = String(payload.senderId || payload.sender);
+  const receiverId = String(payload.receiverId || payload.receiver);
+  const deliveryStatus = normalizeDeliveryStatus(payload.deliveryStatus || payload.status);
+  const timestamp = payload.timestamp || now();
+
+  return {
+    senderId,
+    receiverId,
     text: payload.text || '',
+    type: payload.type || (payload.fileUrl ? 'image' : 'text'),
     fileUrl: payload.fileUrl || null,
     fileName: payload.fileName || null,
     fileType: payload.fileType || null,
     clientMessageId: payload.clientMessageId || null,
-    status: payload.status || 'sent',
-    timestamp: payload.timestamp || now(),
-    conversationKey: conversationKey(payload.sender, payload.receiver),
-    createdAt: now(),
-    updatedAt: now(),
+    deliveryStatus,
+    sentAt: timestamp,
+    seenAt: deliveryStatus === 'seen' ? timestamp : null,
+    deletedFor: Array.isArray(payload.deletedFor) ? payload.deletedFor.map(String) : [],
+    timestamp,
+    createdAt: payload.createdAt || now(),
+    updatedAt: payload.updatedAt || now(),
   };
 }
 
 async function createMessage(payload) {
   const prepared = serializeMessageInput(payload);
-  const ref = await db.collection(COLLECTIONS.messages).add(prepared);
+  const chatId = conversationKey(prepared.senderId, prepared.receiverId);
+  const chatRef = db.collection(COLLECTIONS.chats).doc(chatId);
+  const ref = chatRef.collection(COLLECTIONS.messages).doc();
+
+  const batch = db.batch();
+  batch.set(chatRef, {
+    participants: [prepared.senderId, prepared.receiverId].sort(),
+    lastMessage: prepared.text,
+    lastTimestamp: FieldValue.serverTimestamp(),
+    lastSenderId: prepared.senderId,
+    lastDeliveryStatus: prepared.deliveryStatus,
+    retentionPolicy: {
+      enabled: false,
+      retainDays: 30,
+    },
+    updatedAt: FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+  batch.set(ref, prepared, { merge: true });
+  await batch.commit();
+
   const snap = await ref.get();
-  return withIds(snap.id, snap.data());
+  return canonicalMessageResponse(snap.id, snap.data());
 }
 
 async function getConversationMessages(userA, userB) {
   const key = conversationKey(userA, userB);
-  const snap = await db.collection(COLLECTIONS.messages)
-    .where('conversationKey', '==', key)
+  const snap = await db.collection(COLLECTIONS.chats)
+    .doc(key)
+    .collection(COLLECTIONS.messages)
     .orderBy('timestamp', 'asc')
     .get();
 
-  return snap.docs.map((docSnap) => withIds(docSnap.id, docSnap.data()));
+  return snap.docs.map((docSnap) => canonicalMessageResponse(docSnap.id, docSnap.data()));
 }
 
 async function bulkDeleteMessagesForUser(userId, messageIds) {
-  const refs = messageIds.map((id) => db.collection(COLLECTIONS.messages).doc(String(id)));
-  const snapshots = await db.getAll(...refs);
+  const user = String(userId);
+  const chatsSnap = await db.collection(COLLECTIONS.chats)
+    .where('participants', 'array-contains', user)
+    .get();
 
   const batch = db.batch();
   let deletedCount = 0;
 
-  snapshots.forEach((snap) => {
-    if (!snap.exists) return;
-    const data = snap.data() || {};
-    const sender = String(data.sender || '');
-    const receiver = String(data.receiver || '');
-    if (sender === String(userId) || receiver === String(userId)) {
-      batch.delete(snap.ref);
-      deletedCount += 1;
+  for (const chatSnap of chatsSnap.docs) {
+    const refs = messageIds.map((id) => chatSnap.ref.collection(COLLECTIONS.messages).doc(String(id)));
+    const snapshots = await db.getAll(...refs);
+    snapshots.forEach((snap) => {
+      if (!snap.exists) return;
+      const data = snap.data() || {};
+      const sender = String(data.senderId || '');
+      const receiver = String(data.receiverId || '');
+      const deletedFor = Array.isArray(data.deletedFor) ? data.deletedFor.map(String) : [];
+      if ((sender === user || receiver === user) && !deletedFor.includes(user)) {
+        batch.set(snap.ref, {
+          deletedFor: FieldValue.arrayUnion(user),
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+        deletedCount += 1;
+      }
+    });
+
+    if (deletedCount >= messageIds.length) {
+      break;
     }
-  });
+  }
 
   if (deletedCount > 0) {
     await batch.commit();
@@ -812,18 +870,29 @@ async function bulkDeleteMessagesForUser(userId, messageIds) {
 }
 
 async function markConversationRead(userId, contactId) {
-  const snap = await db.collection(COLLECTIONS.messages)
-    .where('sender', '==', String(contactId))
-    .where('receiver', '==', String(userId))
-    .where('status', 'in', ['sent', 'delivered'])
+  const chatId = conversationKey(userId, contactId);
+  const snap = await db.collection(COLLECTIONS.chats)
+    .doc(chatId)
+    .collection(COLLECTIONS.messages)
+    .where('senderId', '==', String(contactId))
+    .where('receiverId', '==', String(userId))
+    .where('deliveryStatus', '==', 'sent')
     .get();
 
   if (snap.empty) return 0;
 
   const batch = db.batch();
   snap.docs.forEach((docSnap) => {
-    batch.set(docSnap.ref, { status: 'read', updatedAt: now() }, { merge: true });
+    batch.set(docSnap.ref, {
+      deliveryStatus: 'seen',
+      seenAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
   });
+  batch.set(db.collection(COLLECTIONS.chats).doc(chatId), {
+    lastDeliveryStatus: 'seen',
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
   await batch.commit();
   return snap.size;
 }

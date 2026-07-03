@@ -4,7 +4,7 @@ service cloud.firestore {
     function isSignedIn() {
       return request.auth != null;
     }
-    
+
     function isSelf(userId) {
       return isSignedIn() && request.auth.uid == userId;
     }
@@ -26,6 +26,12 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/chats/$(chatId)).data.retentionPolicy.enabled == true;
     }
 
+    function sameParticipants(before, after) {
+      return before.size() == after.size() &&
+        before.hasAll(after) &&
+        after.hasAll(before);
+    }
+
     function immutableUsernameFields() {
       return request.resource.data.username_search == resource.data.username_search &&
              request.resource.data.usernameLower == resource.data.usernameLower &&
@@ -35,8 +41,7 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      // Only the authenticated owner can read/write their own user document.
-      allow get: if isSelf(userId);
+      allow get: if isSignedIn();
       allow list: if false;
       allow create: if isSelf(userId);
       allow update: if isSelf(userId) && immutableUsernameFields();
@@ -50,7 +55,7 @@ service cloud.firestore {
         request.resource.data.participants.size() == 2 &&
         isParticipant(request.resource.data.participants);
       allow update: if isParticipant(resource.data.participants) &&
-        request.resource.data.participants == resource.data.participants;
+        sameParticipants(resource.data.participants, request.resource.data.participants);
       allow delete: if false;
 
       match /messages/{messageId} {

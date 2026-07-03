@@ -102,13 +102,28 @@ class MessageProvider with ChangeNotifier {
 
   Future<void> loadMessages(String contactId) async {
     final me = _currentUser;
-    if (me == null) return;
+    if (me == null) {
+      debugPrint(
+        '[ChatDebug][MessageProvider] loadMessages skipped: currentUser=null '
+        'contactId=$contactId',
+      );
+      return;
+    }
 
+    final chatId = _chatService.conversationId(me.id, contactId);
+    debugPrint(
+      '[ChatDebug][MessageProvider] loadMessages subscribing '
+      'contactId=$contactId chatId=$chatId',
+    );
     _conversationSubs[contactId]?.cancel();
     _conversationSubs[contactId] = _chatService
-        .streamMessages(_chatService.conversationId(me.id, contactId))
+        .streamMessages(chatId)
         .listen(
       (messages) {
+        debugPrint(
+          '[ChatDebug][MessageProvider] loadMessages snapshot '
+          'contactId=$contactId chatId=$chatId messageCount=${messages.length}',
+        );
         _conversations[contactId] = messages;
         if (_activeConversationId == contactId) {
           unawaited(markMessagesAsRead(contactId));
@@ -116,6 +131,10 @@ class MessageProvider with ChangeNotifier {
         notifyListeners();
       },
       onError: (Object e) {
+        debugPrint(
+          '[ChatDebug][MessageProvider] loadMessages error '
+          'contactId=$contactId chatId=$chatId error=$e',
+        );
         _error = e.toString();
         notifyListeners();
       },
@@ -129,6 +148,12 @@ class MessageProvider with ChangeNotifier {
     String? senderName,
   }) async {
     try {
+      final chatId = _chatService.conversationId(senderId, receiverId);
+      debugPrint(
+        '[ChatDebug][MessageProvider] sendMessage '
+        'chatId=$chatId senderId=$senderId receiverId=$receiverId '
+        'textLength=${text.trim().length}',
+      );
       await _chatService.sendMessage(
         senderId: senderId,
         receiverId: receiverId,
@@ -137,6 +162,10 @@ class MessageProvider with ChangeNotifier {
         senderName: senderName,
       );
     } catch (e) {
+      debugPrint(
+        '[ChatDebug][MessageProvider] sendMessage error '
+        'senderId=$senderId receiverId=$receiverId error=$e',
+      );
       _error = e.toString();
       notifyListeners();
     }
@@ -291,6 +320,11 @@ class MessageProvider with ChangeNotifier {
   }
 
   void clearConversation(String contactId) {
+    debugPrint(
+      '[ChatDebug][MessageProvider] clearConversation '
+      'contactId=$contactId hadMessages=${_conversations[contactId]?.length ?? 0} '
+      'hadSubscription=${_conversationSubs.containsKey(contactId)}',
+    );
     _conversationSubs[contactId]?.cancel();
     _conversationSubs.remove(contactId);
     _conversations.remove(contactId);

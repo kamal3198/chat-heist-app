@@ -50,6 +50,9 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isLoadingMore = false;
   bool _hasMore = true;
   String? _boundChatId;
+  int _snapshotLogCounter = 0;
+  int _lastRenderedCombinedCount = -1;
+  int _lastRenderedVisibleCount = -1;
 
   final List<String> _emojis = const [
     '\u{1F970}',
@@ -87,6 +90,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    debugPrint(
+      '[ChatDebug][ChatScreen] dispose cancelling listener '
+      'chatId=$_boundChatId liveDocs=${_liveMessageDocs.length} '
+      'olderDocs=${_olderMessageDocs.length}',
+    );
     _liveMessagesSub?.cancel();
     _typingTimer?.cancel();
     _messageController.dispose();
@@ -109,14 +117,35 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _bindLiveMessagesIfNeeded() {
     final me = context.read<AuthProvider>().currentUser;
-    if (me == null) return;
+    if (me == null) {
+      debugPrint('[ChatDebug][ChatScreen] bind skipped: currentUser=null');
+      return;
+    }
 
     final chatId = _chatService.conversationId(me.id, widget.contact.id);
+    debugPrint(
+      '[ChatDebug][ChatScreen] bind check '
+      'senderId=${me.id} receiverId=${widget.contact.id} '
+      'computedChatId=$chatId boundChatId=$_boundChatId',
+    );
     if (_boundChatId == chatId) return;
 
+    final previousChatId = _boundChatId;
     _boundChatId = chatId;
+    if (_liveMessagesSub != null) {
+      debugPrint(
+        '[ChatDebug][ChatScreen] cancelling previous listener '
+        'previousChatId=$previousChatId newChatId=$chatId',
+      );
+    }
     _liveMessagesSub?.cancel();
+    _snapshotLogCounter = 0;
 
+    debugPrint(
+      '[ChatDebug][ChatScreen] clearing local docs for new listener '
+      'chatId=$chatId previousLiveDocs=${_liveMessageDocs.length} '
+      'previousOlderDocs=${_olderMessageDocs.length}',
+    );
     setState(() {
       _isInitialLoading = true;
       _isLoadingMore = false;
@@ -125,10 +154,33 @@ class _ChatScreenState extends State<ChatScreen> {
       _olderMessageDocs = [];
     });
 
+    debugPrint(
+      '[ChatDebug][ChatScreen] starting listener '
+      'chatId=$chatId path=chats/$chatId/messages pageSize=$_pageSize',
+    );
     _liveMessagesSub = _chatService
         .messageSnapshots(chatId, limit: _pageSize)
         .listen((snapshot) {
       if (!mounted) return;
+      _snapshotLogCounter += 1;
+      final docSummaries = snapshot.docs
+          .take(5)
+          .map((doc) {
+            final data = doc.data();
+            final timestamp = data['timestamp'];
+            final sentAt = data['sentAt'];
+            final deletedFor = data['deletedFor'];
+            return '${doc.id}{sender=${data['senderId']},receiver=${data['receiverId']},'
+                'status=${data['deliveryStatus']},timestamp=$timestamp,'
+                'sentAt=$sentAt,deletedFor=$deletedFor}';
+          })
+          .join(', ');
+      debugPrint(
+        '[ChatDebug][ChatScreen] snapshot #$_snapshotLogCounter '
+        'chatId=$chatId docCount=${snapshot.docs.length} '
+        'changes=${snapshot.docChanges.length} fromCache=${snapshot.metadata.isFromCache} '
+        'hasPendingWrites=${snapshot.metadata.hasPendingWrites} docs=[$docSummaries]',
+      );
       setState(() {
         _liveMessageDocs = snapshot.docs;
         _isInitialLoading = false;
@@ -140,7 +192,11 @@ class _ChatScreenState extends State<ChatScreen> {
       if (snapshot.docs.isNotEmpty) {
         context.read<MessageProvider>().markMessagesAsRead(widget.contact.id);
       }
-    }, onError: (_) {
+    }, onError: (Object error, StackTrace stackTrace) {
+      debugPrint(
+        '[ChatDebug][ChatScreen] snapshot error '
+        'chatId=$chatId error=$error stack=$stackTrace',
+      );
       if (!mounted) return;
       setState(() {
         _isInitialLoading = false;
@@ -151,7 +207,13 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _loadMoreMessages() async {
     if (_isLoadingMore || !_hasMore || _boundChatId == null) return;
     final currentDocs = _combinedDocs;
-    if (currentDocs.isEmpty) return;
+    if (currentDocs.isEmpty) {
+      debugPrint(
+        '[ChatDebug][ChatScreen] loadMore skipped: no current docs '
+        'chatId=$_boundChatId',
+      );
+      return;
+    }
 
     setState(() {
       _isLoadingMore = true;
@@ -168,6 +230,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
       final existingIds = _combinedDocs.map((doc) => doc.id).toSet();
       final newDocs = older.docs.where((doc) => !existingIds.contains(doc.id)).toList();
+      debugPrint(
+        '[ChatDebug][ChatScreen] loadMore snapshot '
+        'chatId=$_boundChatId fetched=${older.docs.length} '
+        'new=${newDocs.length} existing=${existingIds.length}',
+      );
 
       setState(() {
         _olderMessageDocs = [..._olderMessageDocs, ...newDocs];
@@ -176,7 +243,11 @@ class _ChatScreenState extends State<ChatScreen> {
           _hasMore = false;
         }
       });
-    } catch (_) {
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[ChatDebug][ChatScreen] loadMore error '
+        'chatId=$_boundChatId error=$error stack=$stackTrace',
+      );
       if (!mounted) return;
       setState(() {
         _isLoadingMore = false;
@@ -222,6 +293,12 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _messageController.text.trim();
     final me = context.read<AuthProvider>().currentUser;
     if (me == null || text.isEmpty) return;
+    final chatId = _chatService.conversationId(me.id, widget.contact.id);
+    debugPrint(
+      '[ChatDebug][ChatScreen] send tapped '
+      'chatId=$chatId senderId=${me.id} receiverId=${widget.contact.id} '
+      'textLength=${text.length}',
+    );
 
     context.read<MessageProvider>().sendMessage(
           senderId: me.id,
@@ -385,6 +462,27 @@ class _ChatScreenState extends State<ChatScreen> {
         .map(MessageModel.fromDoc)
         .where((message) => !message.isDeletedFor(currentUserId))
         .toList();
+    if (_lastRenderedCombinedCount != combinedDocs.length ||
+        _lastRenderedVisibleCount != messages.length) {
+      _lastRenderedCombinedCount = combinedDocs.length;
+      _lastRenderedVisibleCount = messages.length;
+      debugPrint(
+        '[ChatDebug][ChatScreen] render counts '
+        'chatId=$_boundChatId combinedDocs=${combinedDocs.length} '
+        'visibleMessages=${messages.length} currentUserId=$currentUserId',
+      );
+      if (combinedDocs.isNotEmpty && messages.isEmpty) {
+        final filtered = combinedDocs.map((doc) {
+          final data = doc.data();
+          return '${doc.id}{deletedFor=${data['deletedFor']},'
+              'sender=${data['senderId']},receiver=${data['receiverId']}}';
+        }).join(', ');
+        debugPrint(
+          '[ChatDebug][ChatScreen] all docs filtered out '
+          'chatId=$_boundChatId docs=[$filtered]',
+        );
+      }
+    }
 
     return Scaffold(
       appBar: AppBar(

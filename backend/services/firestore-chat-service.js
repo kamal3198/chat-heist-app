@@ -71,10 +71,13 @@ async function listUserChats(userId, limit = 50) {
 
 async function sendMessage(chatId, payload) {
   const senderId = String(payload.senderId || '').trim();
-  const message = String(payload.message || '').trim();
+  const receiverId = String(payload.receiverId || '').trim();
+  const text = String(payload.text || payload.message || '').trim();
+  const type = String(payload.type || 'text').trim() || 'text';
 
   if (!senderId) throw badRequest('senderId is required');
-  if (!message) throw badRequest('message is required');
+  if (!receiverId) throw badRequest('receiverId is required');
+  if (!text) throw badRequest('text is required');
 
   const chatRef = db.collection(COLLECTIONS.chats).doc(String(chatId));
   const chatSnap = await chatRef.get();
@@ -88,13 +91,31 @@ async function sendMessage(chatId, payload) {
   if (!participants.includes(senderId)) {
     throw badRequest('senderId must be one of chat participants');
   }
+  if (!participants.includes(receiverId)) {
+    throw badRequest('receiverId must be one of chat participants');
+  }
 
   const messageRef = chatRef.collection('messages').doc();
-  await messageRef.set({
+  const batch = db.batch();
+  batch.set(chatRef, {
+    lastMessage: text,
+    lastTimestamp: FieldValue.serverTimestamp(),
+    lastSenderId: senderId,
+    lastDeliveryStatus: 'sent',
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+  batch.set(messageRef, {
     senderId,
-    message,
+    receiverId,
+    text,
+    type,
+    deliveryStatus: 'sent',
+    sentAt: FieldValue.serverTimestamp(),
     timestamp: FieldValue.serverTimestamp(),
+    seenAt: null,
+    deletedFor: [],
   });
+  await batch.commit();
 
   const snap = await messageRef.get();
   return { id: snap.id, ...snap.data() };

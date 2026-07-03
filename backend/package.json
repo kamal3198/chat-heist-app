@@ -10,6 +10,8 @@
     "audit:username-search": "node scripts/audit_username_search.js",
     "backfill:usernames:dry": "node scripts/backfill_usernames.js",
     "backfill:usernames:apply": "node scripts/backfill_usernames.js --apply",
+    "migrate:messages:dry": "node scripts/migrate_messages_to_chats.js",
+    "migrate:messages:apply": "node scripts/migrate_messages_to_chats.js --apply",
     "test:username-race": "node scripts/username_race_test.js"
   },
   "keywords": [

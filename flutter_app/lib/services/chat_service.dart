@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fb;
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
@@ -22,7 +23,7 @@ class ChatService {
 
   static String generateChatId(String uid1, String uid2) {
     final ids = [uid1.trim(), uid2.trim()]..sort();
-    return ids.join('_');
+    return ids.join('__');
   }
 
   String conversationId(String uid1, String uid2) => generateChatId(uid1, uid2);
@@ -68,6 +69,11 @@ class ChatService {
     String chatId, {
     int limit = 30,
   }) {
+    debugPrint(
+      '[ChatDebug][ChatService] messageSnapshots start '
+      'chatId=$chatId path=chats/$chatId/messages '
+      'orderBy=timestamp_desc limit=$limit where=none deletedForFilter=ui',
+    );
     return _chats
         .doc(chatId)
         .collection('messages')
@@ -87,6 +93,11 @@ class ChatService {
     required DocumentSnapshot<Map<String, dynamic>> startAfter,
     int limit = 30,
   }) {
+    debugPrint(
+      '[ChatDebug][ChatService] fetchOlderMessages '
+      'chatId=$chatId path=chats/$chatId/messages '
+      'orderBy=timestamp_desc startAfter=${startAfter.id} limit=$limit',
+    );
     return _chats
         .doc(chatId)
         .collection('messages')
@@ -122,6 +133,12 @@ class ChatService {
     final chatRef = _chats.doc(chatId);
     final messageRef = chatRef.collection('messages').doc();
 
+    debugPrint(
+      '[ChatDebug][ChatService] sendMessage '
+      'chatId=$chatId senderId=$senderId receiverId=$receiverId '
+      'messageId=${messageRef.id} path=chats/$chatId/messages/${messageRef.id}',
+    );
+
     final batch = _firestore.batch();
     batch.set(
       chatRef,
@@ -156,6 +173,10 @@ class ChatService {
     );
 
     await batch.commit();
+    debugPrint(
+      '[ChatDebug][ChatService] sendMessage committed '
+      'chatId=$chatId messageId=${messageRef.id}',
+    );
     await _sendPushToReceiver(
       receiverId: receiverId,
       senderId: senderId,
